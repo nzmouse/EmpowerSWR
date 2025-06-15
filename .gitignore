@@ -34,17 +34,3 @@ google-services.json
 
 # From remote .gitignore (if applicable)
 .DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
-local.properties
-*.apk
-*ap_
-.o
-.so
-#firebase config
-app/google-services.json
-
-# Kotlin error logs
-.kotlin/errors/
