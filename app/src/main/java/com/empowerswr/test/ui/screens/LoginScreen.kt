@@ -26,6 +26,7 @@ import com.empowerswr.test.PrefsHelper
 import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.core.net.toUri
 
 // Login Screen
 // Handles worker login with worker ID and PIN
@@ -67,7 +68,7 @@ fun LoginScreen(
             }
             viewModel.fetchWorkerDetails()
             viewModel.fetchAlerts()
-            navController.navigate("profile") {
+            navController.navigate("home") {
                 popUpTo("login") { inclusive = true }
             }
         }
@@ -215,7 +216,7 @@ fun LoginScreen(
                 color = MaterialTheme.colorScheme.onBackground,
                 modifier = Modifier.clickable {
                     val intent = Intent(Intent.ACTION_DIAL).apply {
-                        data = android.net.Uri.parse("tel:5551234")
+                        data = "tel:5551234".toUri()
                     }
                     context.startActivity(intent)
                 }

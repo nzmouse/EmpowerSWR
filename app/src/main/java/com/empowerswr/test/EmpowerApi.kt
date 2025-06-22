@@ -1,5 +1,6 @@
 package com.empowerswr.test
 
+import com.empowerswr.test.WorkerHistory
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.POST
@@ -23,4 +24,17 @@ interface EmpowerApi {
 
     @POST("update-fcm-token")
     suspend fun updateFcmToken(@Query("workerId") workerId: String, @Body token: String)
+
+    @GET("history")
+    suspend fun getWorkerHistory(@Query("workerId") workerId: String): List<WorkerHistory>
+
+    @GET("teams")
+    suspend fun getTeams(): List<Team>
+
+    @GET("villages")
+    suspend fun getVillages(): List<Village>
+
+    @POST("worker/update")
+    suspend fun updateWorker(@Query("workerId") workerId: String, @Body request: WorkerUpdateRequest): WorkerResponse
 }
+

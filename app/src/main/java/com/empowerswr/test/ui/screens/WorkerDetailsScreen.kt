@@ -3,190 +3,127 @@ package com.empowerswr.test.ui.screens
 import android.content.Context
 import android.util.Log
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.empowerswr.test.EmpowerViewModel
-import com.google.firebase.messaging.FirebaseMessaging
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.*
 
-// Worker Details Screen
-// Shows worker profile details and check-in functionality
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WorkerDetailsScreen(
+    navController: NavHostController,
     viewModel: EmpowerViewModel,
-    context: Context,
-    navController: NavHostController
+    workerId: String,
+    context: Context
 ) {
-    Log.d("EmpowerSWR", "WorkerDetailsScreen composable called")
-    val coroutineScope = rememberCoroutineScope()
-    val scrollState = rememberScrollState()
-    var phone by rememberSaveable { mutableStateOf("") }
-    var fcmError by remember { mutableStateOf<String?>(null) }
-    val snackbarHostState = remember { SnackbarHostState() }
-    val keyboardController = LocalSoftwareKeyboardController.current
-    val token by viewModel.token
+    Log.d("EmpowerSWR", "Entered WorkerDetailsScreen with workerId: $workerId, context: $context")
 
-    val workerDetails by viewModel.workerDetails
-    val alerts by viewModel.alerts
-    val checkInSuccess by viewModel.checkInSuccess
-    val checkInError by viewModel.checkInError
-    val notifications by viewModel.notifications
-    val notificationFromIntent by viewModel.notificationFromIntent
+    val worker by viewModel.workerDetails
+    val history by viewModel.workerHistory
+    val errorMessage by viewModel.errorMessage
 
-    LaunchedEffect(token) {
-        if (token == null) {
-            navController.navigate("login") {
-                popUpTo(navController.graph.startDestinationId) { inclusive = true }
-            }
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        Log.d("EmpowerSWR", "LaunchedEffect for FCM token retrieval started")
-        delay(5000)
-        FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
-            if (task.isSuccessful) {
-                Log.d("EmpowerSWR", "FCM Token: ${task.result}")
-            } else {
-                fcmError = "Failed to get FCM token: ${task.exception?.message}"
-                Log.e("EmpowerSWR", "FCM Token Error: ${task.exception?.message}")
-            }
-        }
-    }
-
-    LaunchedEffect(alerts) {
-        Log.d("EmpowerSWR", "Alerts updated: $alerts")
-        alerts.forEach { alert ->
-            Log.d("EmpowerSWR", "Showing Snackbar for alert: ${alert.message}")
-            snackbarHostState.showSnackbar(alert.message)
-        }
-    }
-
-    LaunchedEffect(notifications) {
-        notifications.forEach { notification ->
-            Log.d("EmpowerSWR", "Showing Snackbar for notification: ${notification.title}: ${notification.body}")
-            try {
-                val result = snackbarHostState.showSnackbar(
-                    message = "${notification.title}: ${notification.body}",
-                    actionLabel = "Dismiss",
-                    duration = SnackbarDuration.Indefinite
-                )
-                Log.d("EmpowerSWR", "Snackbar shown with result: $result")
-                viewModel.removeNotification(notification)
-            } catch (e: Exception) {
-                Log.e("EmpowerSWR", "Failed to show Snackbar: ${e.message}", e)
-            }
-        }
-    }
-
-    LaunchedEffect(notificationFromIntent) {
-        val (title, body) = notificationFromIntent
-        if (title != null || body != null) {
-            Log.d("EmpowerSWR", "Showing Snackbar for intent notification: $title: $body")
-            try {
-                val result = snackbarHostState.showSnackbar(
-                    message = "$title: $body",
-                    actionLabel = "Dismiss",
-                    duration = SnackbarDuration.Indefinite
-                )
-                Log.d("EmpowerSWR", "Snackbar shown with result: $result")
-                viewModel.setNotificationFromIntent(null, null)
-            } catch (e: Exception) {
-                Log.e("EmpowerSWR", "Failed to show Snackbar: ${e.message}", e)
-            }
+    LaunchedEffect(workerId) {
+        if (workerId.isNotEmpty()) {
+            Log.d("EmpowerSWR", "Fetching data for workerId: $workerId")
+            viewModel.setWorkerId(workerId)
+            viewModel.fetchWorkerDetails()
+            viewModel.fetchWorkerHistory()
         } else {
-            Log.d("EmpowerSWR", "No intent notification to display")
+            Log.e("EmpowerSWR", "Invalid workerId: empty")
+            viewModel.setErrorMessage("Invalid worker ID")
         }
     }
 
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) }
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(16.dp)
-                .verticalScroll(scrollState)
-                .imePadding(),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            workerDetails?.let { worker ->
-                Text("Name: ${worker.givenName ?: "N/A"} ${worker.surname ?: "N/A"}")
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("Team: ${worker.teamName ?: "N/A"}")
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("Notices: ${worker.notices ?: "N/A"}")
-                Spacer(modifier = Modifier.height(16.dp))
+    Column(modifier = Modifier.padding(16.dp)) {
+        errorMessage?.let {
+            Text(text = it, color = MaterialTheme.colorScheme.error)
+            Log.d("EmpowerSWR", "Displaying error: $it")
+        }
 
-                if (worker.notices == "Locate") {
-                    Text(
-                        "IMPORTANT: Mifala traem faenem yu naoia. Plis calem Dan long 5552351 o Ofis long 34357 NAOIA.",
-                        color = MaterialTheme.colorScheme.error
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = phone,
-                        onValueChange = { newValue -> phone = newValue },
-                        label = { Text("Phone Number") },
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Phone,
-                            imeAction = ImeAction.Done
-                        ),
-                        keyboardActions = KeyboardActions(
-                            onDone = {
-                                keyboardController?.hide()
-                                coroutineScope.launch {
-                                    viewModel.checkIn(phone)
+        if (worker == null && errorMessage == null) {
+            CircularProgressIndicator()
+            Log.d("EmpowerSWR", "Showing loading indicator")
+        } else {
+            worker?.let { w ->
+                Log.d("EmpowerSWR", "Rendering worker data: ${w.firstName} ${w.surname}, phone: ${w.phone}, phone2: ${w.phone2}, aunzPhone: ${w.aunzPhone}")
+                Text(text = "Personal Info", style = MaterialTheme.typography.headlineSmall)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(text = "Surname: ${w.surname ?: "N/A"}")
+                Text(text = "Given Names: ${w.firstName ?: "N/A"}")
+                Text(text = "Preferred Name: ${w.prefName ?: "N/A"}")
+                Text(text = "DoB: ${formatDateSafely(w.dob) ?: "N/A"}")
+                Text(text = "Team: ${w.teamName ?: "N/A"}")
+
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(text = "Home Village", style = MaterialTheme.typography.headlineSmall)
+                Text(text = "${w.homeVillage ?: "N/A"}, ${w.homeIsland ?: "N/A"}")
+
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(text = "Residential Address", style = MaterialTheme.typography.headlineSmall)
+                Text(text = "${w.residentialAddress ?: "N/A"}, ${w.residentialIsland ?: "N/A"}")
+
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(text = "Contact Details", style = MaterialTheme.typography.headlineSmall)
+                Text(text = "Phone: ${w.phone?.ifEmpty { "N/A" } ?: "N/A"}")
+                Text(text = "2nd Phone: ${w.phone2?.ifEmpty { "N/A" } ?: "N/A"}")
+                Text(text = "NZ/Australia Phone: ${w.aunzPhone?.ifEmpty { "N/A" } ?: "N/A"}")
+                Text(text = "Email: ${w.email ?: "N/A"}")
+
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(text = "Driver’s License", style = MaterialTheme.typography.headlineSmall)
+                Text(text = "Licence Number: ${w.dLicence ?: "N/A"}")
+                Text(text = "Classes: ${w.dLClass ?: "N/A"}")
+                Text(text = "Expiry: ${formatDateSafely(w.dLicenceExp) ?: "N/A"}")
+
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(text = "History", style = MaterialTheme.typography.headlineSmall)
+                Log.d("EmpowerSWR", "History size: ${history.size}, history: $history")
+                if (history.isEmpty()) {
+                    Text(text = "No history available")
+                    Log.d("EmpowerSWR", "No history records found")
+                } else {
+                    LazyColumn {
+                        items(history) { h ->
+                            Log.d("EmpowerSWR", "Rendering history: team=${h.team}, employer=${h.employer}, country=${h.country}")
+                            Card(modifier = Modifier.padding(vertical = 4.dp)) {
+                                Column(modifier = Modifier.padding(8.dp)) {
+                                    Text(text = "Team: ${h.team ?: "N/A"}")
+                                    Text(text = "Employer: ${h.employer ?: "N/A"}")
+                                    Text(text = "Country: ${h.country ?: "N/A"}")
+                                    Text(text = "Start: ${formatDateSafely(h.dateFrom) ?: "N/A"}")
+                                    Text(text = "End: ${formatDateSafely(h.dateTo) ?: "Ongoing"}")
                                 }
                             }
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Button(
-                        onClick = {
-                            keyboardController?.hide()
-                            coroutineScope.launch {
-                                viewModel.checkIn(phone)
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Check In")
-                    }
-                    checkInSuccess?.let { success ->
-                        Spacer(modifier = Modifier.height(8.dp))
-                        if (success) {
-                            Text("Check-in successful!", color = MaterialTheme.colorScheme.primary)
                         }
                     }
-                    checkInError?.let { error ->
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(error, color = MaterialTheme.colorScheme.error)
-                    }
                 }
-            } ?: run {
-                Text("Loading worker details...")
-            }
-            fcmError?.let { error ->
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("FCM Error: $error", color = MaterialTheme.colorScheme.error)
+
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(
+                    onClick = { /* navController.navigate("update_details/$workerId") */ },
+                    enabled = false
+                ) {
+                    Text("Edit Details (Not Implemented)")
+                }
             }
         }
+    }
+}
+
+private fun formatDateSafely(date: String?): String {
+    if (date.isNullOrEmpty() || date == "0000-00-00") return ""
+    val inputFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+    val outputFormat = SimpleDateFormat("dd-MMM-yyyy", Locale.getDefault())
+    return try {
+        outputFormat.format(inputFormat.parse(date)!!)
+    } catch (e: Exception) {
+        Log.e("EmpowerSWR", "Date format error: ${e.message}, date: $date")
+        ""
     }
 }
