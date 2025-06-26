@@ -6,12 +6,15 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import java.net.UnknownHostException
+import com.google.gson.Gson
+import java.util.Base64
 
 class EmpowerViewModel(application: Application) : AndroidViewModel(application) {
     private val _token = mutableStateOf<String?>(null)
@@ -22,6 +25,9 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
 
     private val _workerDetails = mutableStateOf<WorkerResponse?>(null)
     val workerDetails: State<WorkerResponse?> = _workerDetails
+
+    private val _history = mutableStateOf<List<HistoryResponse>>(emptyList())
+    val history: State<List<HistoryResponse>> = _history
 
     private val _alerts = mutableStateOf<List<Alert>>(emptyList())
     val alerts: State<List<Alert>> = _alerts
@@ -45,19 +51,22 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
 
     private val api = retrofit.create(EmpowerApi::class.java)
 
+    private val gson = Gson()
+
     init {
         val savedToken = PrefsHelper.getToken(getApplication())
         val savedTokenExpiry = PrefsHelper.getTokenExpiry(getApplication())
         Log.d("EmpowerSWR", "init - Saved token: $savedToken, expiry: $savedTokenExpiry")
         if (savedToken != null && savedTokenExpiry != null) {
             val currentTime = System.currentTimeMillis() / 1000
-            if (savedTokenExpiry > currentTime) {
+            if (savedTokenExpiry > currentTime && isValidJwt(savedToken)) {
                 _token.value = savedToken
                 Log.d("EmpowerSWR", "init - Restored valid token: $savedToken")
                 fetchWorkerDetails()
+                fetchHistory()
                 fetchAlerts()
             } else {
-                Log.d("EmpowerSWR", "init - Saved token expired, clearing")
+                Log.d("EmpowerSWR", "init - Saved token expired or invalid, clearing")
                 PrefsHelper.clearToken(getApplication())
                 _token.value = null
             }
@@ -72,16 +81,39 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    private fun isValidJwt(token: String): Boolean {
+        // Basic JWT format check: three segments separated by dots
+        return token.split(".").size == 3
+    }
+
+    private fun getWorkerIdFromJwt(token: String?): String? {
+        if (token == null || !isValidJwt(token)) return null
+        try {
+            val payload = token.split(".")[1]
+            val decodedPayload = String(Base64.getUrlDecoder().decode(payload))
+            val json = gson.fromJson(decodedPayload, Map::class.java)
+            return json["worker_id"]?.toString()
+        } catch (e: Exception) {
+            Log.e("EmpowerSWR", "Failed to decode JWT: ${e.message}")
+            return null
+        }
+    }
+
     fun register(passport: String, surname: String, pin: String) {
         viewModelScope.launch {
             try {
                 val response = api.register(RegistrationRequest(passport, surname, pin))
+                Log.d("EmpowerSWR", "register - Received token: ${response.token}")
+                if (!isValidJwt(response.token)) {
+                    throw IllegalStateException("Invalid JWT token received from register")
+                }
                 _token.value = response.token
                 PrefsHelper.saveWorkerId(getApplication(), response.workerId)
                 PrefsHelper.saveToken(getApplication(), response.token, response.expiry)
                 PrefsHelper.setRegistered(getApplication(), true)
                 _loginError.value = null
                 fetchWorkerDetails()
+                fetchHistory()
                 fetchAlerts()
             } catch (e: Exception) {
                 _loginError.value = when (e) {
@@ -98,11 +130,16 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             try {
                 val response = api.login(LoginRequest(workerId, pin))
+                Log.d("EmpowerSWR", "login - Received token: ${response.token}")
+                if (!isValidJwt(response.token)) {
+                    throw IllegalStateException("Invalid JWT token received from login")
+                }
                 _token.value = response.token
                 PrefsHelper.saveWorkerId(getApplication(), response.workerId)
                 PrefsHelper.saveToken(getApplication(), response.token, response.expiry)
                 _loginError.value = null
                 fetchWorkerDetails()
+                fetchHistory()
                 fetchAlerts()
             } catch (e: Exception) {
                 _loginError.value = when (e) {
@@ -128,12 +165,20 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
 
     fun setToken(token: String?) {
         Log.d("EmpowerSWR", "setToken - Setting token: $token")
-        _token.value = token
-        if (token != null) {
+        if (token != null && isValidJwt(token)) {
+            _token.value = token
             val expiry = (System.currentTimeMillis() / 1000) + 24 * 60 * 60 // 24 hours
             PrefsHelper.saveToken(getApplication(), token, expiry)
+            fetchWorkerDetails()
+            fetchHistory()
+            fetchAlerts()
         } else {
+            Log.w("EmpowerSWR", "Invalid or null token, clearing")
             PrefsHelper.clearToken(getApplication())
+            _token.value = null
+            _workerDetails.value = null
+            _history.value = emptyList()
+            _alerts.value = emptyList()
         }
     }
 
@@ -146,46 +191,98 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         _notifications.value = _notifications.value.toMutableList().apply { remove(notification) }
     }
 
-    fun fetchWorkerDetails() {
-        viewModelScope.launch {
+    fun fetchWorkerDetails(onError: ((Throwable) -> Unit)? = null) {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 val token = _token.value ?: throw IllegalStateException("No token available")
+                Log.d("EmpowerSWR", "fetchWorkerDetails - Sending token: $token")
                 val response = api.getWorkerDetails(token)
                 _workerDetails.value = response
-                Log.d("EmpowerSWR", "fetchWorkerDetails - Success: ${response.givenName} ${response.surname}")
+                Log.d("EmpowerSWR", "fetchWorkerDetails - Success: ${response.firstName} ${response.surname}, notices=${response.notices}")
             } catch (e: Exception) {
                 Log.e("EmpowerSWR", "fetchWorkerDetails error: ${e.message}", e)
+                _workerDetails.value = null
+                onError?.invoke(e)
+                if (e.message?.contains("Invalid JWT") == true) {
+                    logout()
+                }
+            }
+        }
+    }
+
+    fun fetchHistory(onError: ((Throwable) -> Unit)? = null) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val workerId = PrefsHelper.getWorkerId(getApplication())
+                    ?: throw IllegalStateException("No workerId available")
+                Log.d("EmpowerSWR", "fetchHistory - Sending workerId: $workerId")
+                val response = api.getWorkerHistory(workerId)
+                _history.value = response
+                Log.d("EmpowerSWR", "fetchHistory - Success, history count: ${response.size}")
+            } catch (e: Exception) {
+                Log.e("EmpowerSWR", "fetchHistory error: ${e.message}", e)
+                _history.value = emptyList()
+                onError?.invoke(e)
             }
         }
     }
 
     fun fetchAlerts() {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 val token = _token.value ?: throw IllegalStateException("No token available")
+                Log.d("EmpowerSWR", "fetchAlerts - Sending token: $token")
                 val response = api.getAlerts(token)
                 _alerts.value = response
                 Log.d("EmpowerSWR", "fetchAlerts - Success, alerts count: ${response.size}")
             } catch (e: Exception) {
                 Log.e("EmpowerSWR", "fetchAlerts error: ${e.message}", e)
+                _alerts.value = emptyList()
+                if (e.message?.contains("Invalid JWT") == true) {
+                    logout()
+                }
             }
         }
     }
 
     fun checkIn(phone: String) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
+                if (!phone.matches(Regex("^\\d{7,15}$"))) {
+                    throw IllegalArgumentException("Phone number must be 7-15 digits")
+                }
                 val token = _token.value ?: throw IllegalStateException("No token available")
-                val response = api.checkIn(CheckInRequest(phone))
+                val workerId = getWorkerIdFromJwt(token) ?: "Unknown"
+                Log.d("EmpowerSWR", "checkIn - Sending token: $token, worker_id: $workerId, phone: $phone")
+                val response = api.checkIn(token, CheckInRequest(phone))
                 _checkInSuccess.value = response.success
-                _checkInError.value = null
-                Log.d("EmpowerSWR", "checkIn - Success: ${response.success}")
+                _checkInError.value = response.message ?: if (response.success) "Check-in complete" else "Check-in failed"
+                if (response.success) {
+                    fetchWorkerDetails()
+                }
+                Log.d("EmpowerSWR", "checkIn - Success: ${response.success}, Message: ${response.message}")
             } catch (e: Exception) {
-                _checkInError.value = "Check-in failed: ${e.message}"
+                val errorMessage = when (e) {
+                    is HttpException -> {
+                        val responseBody = e.response()?.errorBody()?.string() ?: "No response body"
+                        "HTTP ${e.code()}: ${e.message()}, Body: $responseBody"
+                    }
+                    else -> e.message ?: "Unknown error"
+                }
+                _checkInError.value = "Check-in failed: $errorMessage"
                 _checkInSuccess.value = false
-                Log.e("EmpowerSWR", "checkIn error: ${e.message}", e)
+                Log.e("EmpowerSWR", "checkIn error: $errorMessage", e)
+                if (errorMessage.contains("Invalid JWT")) {
+                    logout()
+                }
             }
         }
+    }
+
+    fun clearCheckInState() {
+        _checkInSuccess.value = null
+        _checkInError.value = null
+        Log.d("EmpowerSWR", "clearCheckInState - Cleared check-in states")
     }
 
     fun logout() {
@@ -193,6 +290,7 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         _token.value = null
         _loginError.value = null
         _workerDetails.value = null
+        _history.value = emptyList()
         _alerts.value = emptyList()
         _notifications.value = emptyList()
         _notificationFromIntent.value = null to null

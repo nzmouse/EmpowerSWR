@@ -19,8 +19,11 @@ interface EmpowerApi {
     suspend fun getAlerts(@Query("token") token: String): List<Alert>
 
     @POST("checkin")
-    suspend fun checkIn(@Body request: CheckInRequest): CheckInResponse
+    suspend fun checkIn(@Query("token") token: String, @Body request: CheckInRequest): CheckInResponse
 
     @POST("update-fcm-token")
     suspend fun updateFcmToken(@Query("workerId") workerId: String, @Body token: String)
+
+    @GET("history")
+    suspend fun getWorkerHistory(@Query("workerId") workerId: String): List<HistoryResponse>
 }

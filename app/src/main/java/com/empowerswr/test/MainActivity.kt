@@ -38,15 +38,8 @@ import com.empowerswr.test.ui.screens.UpdateDetailsScreen
 import com.empowerswr.test.ui.screens.InformationScreen
 import com.empowerswr.test.ui.screens.SettingsScreen
 import com.empowerswr.test.ui.theme.EmpowerSWRTheme
+import com.google.firebase.messaging.FirebaseMessaging
 
-// File: MainActivity.kt
-// Purpose: Entry point for EmpowerSWRApp0.2, handles navigation and app setup
-// Package: com.empowerswr.test
-// Features: Navigation for registration, login, profile, work location, contracts, update details, information, settings
-// Notes: Composables are in separate files under com.empowerswr.test.ui.screens for modularity
-
-// Activity Setup
-// Initializes MainActivity, ViewModel, and handles token restoration and notification intents
 class MainActivity : ComponentActivity() {
     private val viewModel: EmpowerViewModel by viewModels {
         object : ViewModelProvider.Factory {
@@ -74,20 +67,36 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        if (savedToken != null && savedTokenExpiry != null) {
+        // Restore token only if it's a valid JWT
+        if (savedToken != null && savedTokenExpiry != null && savedToken.split(".").size == 3) {
             val currentTime = System.currentTimeMillis() / 1000
             if (savedTokenExpiry > currentTime) {
                 viewModel.setToken(savedToken)
-                Log.d("EmpowerSWR", "onCreate - Restored valid token: $savedToken")
+                Log.d("EmpowerSWR", "onCreate - Restored valid JWT token: $savedToken")
             } else {
                 Log.d("EmpowerSWR", "onCreate - Saved token expired, clearing")
                 PrefsHelper.clearToken(this)
                 viewModel.setToken(null)
             }
-        } else if (savedToken != null) {
-            Log.d("EmpowerSWR", "onCreate - Saved token has no expiry, clearing")
+        } else {
+            Log.d("EmpowerSWR", "onCreate - Saved token invalid or missing, clearing")
             PrefsHelper.clearToken(this)
             viewModel.setToken(null)
+        }
+
+        // Ensure FCM token is stored correctly
+        FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
+            if (task.isSuccessful) {
+                val fcmToken = task.result
+                Log.d("EmpowerSWR", "MainActivity - FCM Token: $fcmToken")
+                PrefsHelper.saveFcmToken(this, fcmToken)
+                val workerId = PrefsHelper.getWorkerId(this)
+                if (workerId != null) {
+                    viewModel.updateFcmToken(fcmToken, workerId)
+                }
+            } else {
+                Log.e("EmpowerSWR", "MainActivity - FCM Token Error: ${task.exception?.message}")
+            }
         }
 
         setContent {
@@ -126,8 +135,6 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// Navigation Items
-// Defines navigation items for bottom navigation bar
 data class NavItem(
     val title: String,
     val icon: ImageVector,
@@ -144,8 +151,6 @@ val navItems = listOf(
     NavItem("Settings", Icons.Filled.Settings, "settings")
 )
 
-// Navigation Setup
-// Manages app navigation with bottom navigation bar and NavHost
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppNavigation(
@@ -190,7 +195,7 @@ fun AppNavigation(
                 title = {
                     Text(
                         if (token == null) "Empower SWR - Login"
-                        else "Logged in as ${workerDetails?.givenName ?: "Worker ID: ${PrefsHelper.getWorkerId(context) ?: "Unknown"}"}"
+                        else "Logged in as ${workerDetails?.firstName ?: "Worker ID: ${PrefsHelper.getWorkerId(context) ?: "Unknown"}"}"
                     )
                 },
                 actions = {
