@@ -35,6 +35,31 @@ data class HistoryResponse(
     val dateTo: String?
 )
 data class Alert(val message: String)
-data class CheckInRequest(val phone: String)
-data class CheckInResponse(val success: Boolean, val message: String? = null)
 data class Notification(val title: String, val body: String)
+data class CheckInRequest(
+    val phone: String,
+    val worker_id: String? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null
+)
+data class TeamResponse(val teamId: String, val teamName: String)
+data class VillageResponse(val villageId: String, val villageName: String, val island: String?)
+data class WorkerUpdateRequest(
+    val phone: String?,
+    val phone2: String?,
+    val aunzPhone: String?,
+    val email: String?,
+    val dLicence: String?,
+    val dLClass: String?,
+    val dLicenceExp: String?,
+    val resID: String?
+)
+data class WorkerUpdateResponse(val message: String)
+data class LocationRequest(
+    val worker_id: String,
+    val latitude: Double,
+    val longitude: Double,
+    val action: String
+)
+data class LocationResponse(val success: Boolean, val message: String?)
+data class CheckInResponse(val success: Boolean, val message: String? = null)

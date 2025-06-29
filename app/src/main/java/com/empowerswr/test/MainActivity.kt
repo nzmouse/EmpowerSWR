@@ -18,7 +18,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -39,6 +38,8 @@ import com.empowerswr.test.ui.screens.InformationScreen
 import com.empowerswr.test.ui.screens.SettingsScreen
 import com.empowerswr.test.ui.theme.EmpowerSWRTheme
 import com.google.firebase.messaging.FirebaseMessaging
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val viewModel: EmpowerViewModel by viewModels {
@@ -67,7 +68,6 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Restore token only if it's a valid JWT
         if (savedToken != null && savedTokenExpiry != null && savedToken.split(".").size == 3) {
             val currentTime = System.currentTimeMillis() / 1000
             if (savedTokenExpiry > currentTime) {
@@ -84,7 +84,6 @@ class MainActivity : ComponentActivity() {
             viewModel.setToken(null)
         }
 
-        // Ensure FCM token is stored correctly
         FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
             if (task.isSuccessful) {
                 val fcmToken = task.result
@@ -110,27 +109,21 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        Log.d("EmpowerSWR", "onNewIntent called with intent: ${intent.extras?.keySet()?.joinToString() ?: "null"}")
+        handleIntent(intent)
+    }
+
     private fun handleIntent(intent: Intent?) {
         val notificationTitle = intent?.getStringExtra("notification_title")
         val notificationBody = intent?.getStringExtra("notification_body")
-        Log.d("EmpowerSWR", "handleIntent - Extras: notification_title=$notificationTitle, notification_body=$notificationBody")
+        Log.d("EmpowerSWR", "handleIntent - Extras: ${intent?.extras?.keySet()?.joinToString() ?: "none"}")
         if (notificationTitle != null || notificationBody != null) {
             viewModel.setNotificationFromIntent(notificationTitle, notificationBody)
             Log.d("EmpowerSWR", "handleIntent - Notification intent received: $notificationTitle: $notificationBody")
         } else {
             Log.d("EmpowerSWR", "handleIntent - No notification intent extras found")
-        }
-    }
-
-    fun handleIntentUpdate(intent: Intent?) {
-        val notificationTitle = intent?.getStringExtra("notification_title")
-        val notificationBody = intent?.getStringExtra("notification_body")
-        Log.d("EmpowerSWR", "handleIntentUpdate - Extras: notification_title=$notificationTitle, notification_body=$notificationBody")
-        if (notificationTitle != null || notificationBody != null) {
-            viewModel.setNotificationFromIntent(notificationTitle, notificationBody)
-            Log.d("EmpowerSWR", "handleIntentUpdate - Notification intent received: $notificationTitle: $notificationBody")
-        } else {
-            Log.d("EmpowerSWR", "handleIntentUpdate - No notification intent extras found")
         }
     }
 }
@@ -163,6 +156,19 @@ fun AppNavigation(
     val currentRoute by navController.currentBackStackEntryAsState()
     val currentDestination = currentRoute?.destination?.route
     var showLogoutDialog by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
+
+    // Force navigation to home after login and clear back stack
+    LaunchedEffect(token) {
+        if (token != null) {
+            Log.d("EmpowerSWR", "Token set, forcing navigation to home from $currentDestination")
+            delay(500) // Increased delay for token propagation
+            navController.navigate("home") {
+                popUpTo(navController.graph.startDestinationId) { inclusive = true }
+                launchSingleTop = true
+            }
+        }
+    }
 
     if (showLogoutDialog) {
         AlertDialog(
@@ -219,12 +225,13 @@ fun AppNavigation(
                             label = { Text(item.title) },
                             selected = currentDestination == item.route,
                             onClick = {
+                                Log.d("EmpowerSWR", "NavigationBarItem clicked: ${item.route}")
                                 navController.navigate(item.route) {
                                     popUpTo(navController.graph.startDestinationId) {
                                         saveState = true
                                     }
                                     launchSingleTop = true
-                                    restoreState = true
+                                    restoreState = false // Prevent restoring profile
                                 }
                             }
                         )
@@ -249,7 +256,13 @@ fun AppNavigation(
                 LoginScreen(
                     viewModel = viewModel,
                     context = context,
-                    navController = navController
+                    onLoginSuccess = {
+                        Log.d("EmpowerSWR", "onLoginSuccess triggered, navigating to home")
+                        navController.navigate("home") {
+                            popUpTo(navController.graph.startDestinationId) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                    }
                 )
             }
             composable("home") {

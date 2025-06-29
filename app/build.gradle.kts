@@ -7,12 +7,12 @@ plugins {
 
 android {
     namespace = "com.empowerswr.test"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.empowerswr.test"
-        minSdk = 24
-        targetSdk = 34
+        minSdk = 26
+        targetSdk = 35
         versionCode = 1
         versionName = "0.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -52,14 +52,17 @@ android {
 }
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.13.1")
-    implementation(platform("androidx.compose:compose-bom:2024.09.03"))
-    implementation("androidx.activity:activity-compose:1.9.2")
+    implementation(libs.androidx.core.ktx)
+    implementation(platform(libs.androidx.compose.bom))
+    //noinspection UseTomlInstead
+    implementation("androidx.activity:activity-compose:1.10.1")
+    //noinspection UseTomlInstead
     implementation("androidx.compose.material3:material3:1.3.2")
-    implementation("androidx.compose.ui:ui:1.7.0")
-    implementation("androidx.compose.runtime:runtime:1.7.0")
-    implementation("androidx.compose.runtime:runtime-livedata:1.7.0")
-    implementation("androidx.compose.ui:ui-tooling-preview:1.7.0")
+    //noinspection UseTomlInstead
+    implementation("androidx.compose.ui:ui:1.8.3")
+    implementation("androidx.compose.runtime:runtime:1.8.3")
+    implementation("androidx.compose.runtime:runtime-livedata:1.8.3")
+    implementation("androidx.compose.ui:ui-tooling-preview:1.8.3")
     debugImplementation("androidx.compose.ui:ui-tooling:1.7.0")
     implementation("androidx.compose.foundation:foundation:1.7.0")
     implementation("androidx.compose.material:material-icons-extended:1.7.0")
@@ -78,4 +81,16 @@ dependencies {
     implementation("io.jsonwebtoken:jjwt:0.12.6")
     implementation("androidx.navigation:navigation-compose:2.8.0")
     testImplementation("junit:junit:4.13.2")
+    //location
+    implementation ("com.google.android.gms:play-services-location:21.3.0")
+
+    // Force specific versions to avoid conflicts
+    configurations.all {
+        resolutionStrategy {
+            force("androidx.activity:activity:1.10.1")
+            force("androidx.activity:activity-compose:1.10.1")
+            force("androidx.activity:activity-ktx:1.10.1")
+        }
+    }
+
 }

@@ -1,24 +1,26 @@
 [versions]
-agp = "8.10.0"
+agp = "8.10.1"
+core-ktx = "1.16.0"
 java-jwt = "4.4.0"
 kotlin = "2.0.21"
-androidx-core-ktx = "1.15.0"
-androidx-activity-compose = "1.9.3"
-androidx-lifecycle = "2.8.6"
-coroutines = "1.8.1"
+androidx-core-ktx = "1.16.0"
+androidx-activity-compose = "1.10.1"
+androidx-lifecycle = "2.9.1"
+coroutines = "1.9.0"
 retrofit = "2.11.0"
 gson = "2.11.0"
 okhttp = "4.12.0"
-firebase-bom = "32.8.1" # Downgraded to latest known stable version
+firebase-bom = "33.16.0" # Downgraded to latest known stable version
 androidx-security-crypto = "1.0.0" # Reverted to stable version
 navigation = "2.9.0"
-compose-bom = "2025.06.00" # Downgraded to latest known stable version
+compose-bom = "2025.06.01" # Downgraded to latest known stable version
 
 [libraries]
 # Core Android
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "androidx-core-ktx" }
 
 #Navigation
+androidx-core-ktx-v1131 = { module = "androidx.core:core-ktx", version.ref = "core-ktx" }
 androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version = "2.9.0" }
 
 #material3 Extras

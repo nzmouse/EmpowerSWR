@@ -44,6 +44,7 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
     private val _notificationFromIntent = mutableStateOf(Pair<String?, String?>(null, null))
     val notificationFromIntent: State<Pair<String?, String?>> = _notificationFromIntent
 
+
     private val retrofit = Retrofit.Builder()
         .baseUrl("https://db.nougro.com/api/api.php/")
         .addConverterFactory(GsonConverterFactory.create())
@@ -82,7 +83,6 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private fun isValidJwt(token: String): Boolean {
-        // Basic JWT format check: three segments separated by dots
         return token.split(".").size == 3
     }
 
@@ -252,11 +252,10 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
                     throw IllegalArgumentException("Phone number must be 7-15 digits")
                 }
                 val token = _token.value ?: throw IllegalStateException("No token available")
-                val workerId = getWorkerIdFromJwt(token) ?: "Unknown"
-                Log.d("EmpowerSWR", "checkIn - Sending token: $token, worker_id: $workerId, phone: $phone")
+                Log.d("EmpowerSWR", "checkIn - Sending token: $token, phone: $phone")
                 val response = api.checkIn(token, CheckInRequest(phone))
                 _checkInSuccess.value = response.success
-                _checkInError.value = response.message ?: if (response.success) "Check-in complete" else "Check-in failed"
+                _checkInError.value = response.message ?: if (response.success) "Check-in successful" else "Check-in failed"
                 if (response.success) {
                     fetchWorkerDetails()
                 }
@@ -275,6 +274,23 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
                 if (errorMessage.contains("Invalid JWT")) {
                     logout()
                 }
+            }
+        }
+    }
+
+    fun saveLocation(workerId: String, latitude: Double, longitude: Double, action: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val token = _token.value ?: throw IllegalStateException("No token available")
+                Log.d("EmpowerSWR", "saveLocation - Sending token: $token, worker_id: $workerId, latitude: $latitude, longitude: $longitude, action: $action")
+                val response = api.saveLocation(token, LocationRequest(worker_id = workerId, latitude = latitude, longitude = longitude, action = action))
+                if (response.success) {
+                    Log.d("EmpowerSWR", "saveLocation - Success: Location saved/updated for worker_id: $workerId, action: $action")
+                } else {
+                    Log.e("EmpowerSWR", "saveLocation - Failed: ${response.message}")
+                }
+            } catch (e: Exception) {
+                Log.e("EmpowerSWR", "saveLocation error: ${e.message}", e)
             }
         }
     }

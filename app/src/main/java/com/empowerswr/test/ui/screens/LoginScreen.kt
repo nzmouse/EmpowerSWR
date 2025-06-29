@@ -1,135 +1,182 @@
 package com.empowerswr.test.ui.screens
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.util.Log
-import androidx.compose.foundation.clickable
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.navigation.NavHostController
+import androidx.core.content.ContextCompat
 import com.empowerswr.test.EmpowerViewModel
-import com.empowerswr.test.PrefsHelper
-import com.google.firebase.messaging.FirebaseMessaging
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-// Login Screen
-// Handles worker login with worker ID and PIN
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LoginScreen(
     viewModel: EmpowerViewModel,
     context: Context,
-    navController: NavHostController
+    onLoginSuccess: () -> Unit
 ) {
-    Log.d("EmpowerSWR", "LoginScreen composable called")
+    Log.d("EmpowerSWR", "LoginScreen composable called, Android version: ${Build.VERSION.SDK_INT}, Release: ${Build.VERSION.RELEASE}")
     val coroutineScope = rememberCoroutineScope()
-    val scrollState = rememberScrollState()
-    var workerId by rememberSaveable { mutableStateOf(PrefsHelper.getWorkerId(context) ?: "") }
-    var pin by rememberSaveable { mutableStateOf("") }
-    var fcmToken by remember { mutableStateOf<String?>(null) }
-    var fcmError by remember { mutableStateOf<String?>(null) }
+    val snackbarScope = rememberCoroutineScope { Dispatchers.Main }
+    var workerId by remember { mutableStateOf("") }
+    var pin by remember { mutableStateOf("") }
+    var loginError by remember { mutableStateOf<String?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
     val keyboardController = LocalSoftwareKeyboardController.current
-    val context = LocalContext.current
+    val loginErrorState by viewModel.loginError
+    var showSettingsPrompt by remember { mutableStateOf(false) }
+    val activity = context.findEmpowerActivity() ?: run {
+        Log.e("EmpowerSWR", "Context is not a ComponentActivity")
+        throw IllegalStateException("LoginScreen must be called within a ComponentActivity")
+    }
 
-    val token by viewModel.token
-    val loginError by viewModel.loginError
-    val alerts by viewModel.alerts
-    val notifications by viewModel.notifications
-    val notificationFromIntent by viewModel.notificationFromIntent
-
-    LaunchedEffect(token) {
-        if (token != null) {
-            FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
-                if (task.isSuccessful) {
-                    val newFcmToken = task.result
-                    fcmToken = newFcmToken
-                    val currentWorkerId = PrefsHelper.getWorkerId(context) ?: return@addOnCompleteListener
-                    viewModel.updateFcmToken(newFcmToken, currentWorkerId)
-                } else {
-                    fcmError = "Failed to get FCM token: ${task.exception?.message}"
-                }
-            }
-            viewModel.fetchWorkerDetails()
-            viewModel.fetchAlerts()
-            navController.navigate("profile") {
-                popUpTo("login") { inclusive = true }
-            }
+    // Permission launcher
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val fineGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true
+        val coarseGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        Log.d("EmpowerSWR", "Permission result: fineGranted=$fineGranted, coarseGranted=$coarseGranted")
+        if (fineGranted || coarseGranted) {
+            Log.d("EmpowerSWR", "Location permission granted")
+        } else {
+            showSettingsPrompt = true
+            loginError = "Location permission denied. Please enable it in app settings."
+            Log.d("EmpowerSWR", "Permission denied, showing settings prompt")
         }
     }
 
+    // Settings launcher
+    val settingsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+        Log.d("EmpowerSWR", "Returned from settings, rechecking permission")
+        if (ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.d("EmpowerSWR", "Location permission granted after settings")
+        } else {
+            showSettingsPrompt = true
+            loginError = "Location permission still denied. Please enable it in settings."
+            Log.d("EmpowerSWR", "Location permission still denied after settings")
+        }
+    }
+
+    // Check permissions on start with delay to ensure lifecycle stability
     LaunchedEffect(Unit) {
-        Log.d("EmpowerSWR", "LaunchedEffect for FCM token retrieval started")
-        delay(5000)
-        FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
-            if (task.isSuccessful) {
-                fcmToken = task.result
-                Log.d("EmpowerSWR", "FCM Token: $fcmToken")
-                PrefsHelper.saveFcmToken(context, fcmToken!!)
-            } else {
-                fcmError = "Failed to get FCM token: ${task.exception?.message}"
-                Log.e("EmpowerSWR", "FCM Token Error: ${task.exception?.message}")
-            }
+        Log.d("EmpowerSWR", "Checking initial permission state in LoginScreen")
+        delay(500) // Ensure composable is stable
+        if (ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.d("EmpowerSWR", "Initial permission request in LoginScreen")
+            permissionLauncher.launch(arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            ))
         }
     }
 
-    LaunchedEffect(alerts) {
-        Log.d("EmpowerSWR", "Alerts updated: $alerts")
-        alerts.forEach { alert ->
-            Log.d("EmpowerSWR", "Showing Snackbar for alert: ${alert.message}")
-            snackbarHostState.showSnackbar(alert.message)
-        }
-    }
-
-    LaunchedEffect(notifications) {
-        notifications.forEach { notification ->
-            Log.d("EmpowerSWR", "Showing Snackbar for notification: ${notification.title}: ${notification.body}")
-            try {
-                val result = snackbarHostState.showSnackbar(
-                    message = "${notification.title}: ${notification.body}",
+    // Check permission and request
+    fun checkAndRequestLocationPermission() {
+        Log.d("EmpowerSWR", "Checking location permission")
+        if (ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.d("EmpowerSWR", "Location permission already granted")
+            snackbarScope.launch {
+                snackbarHostState.showSnackbar(
+                    message = "Location permission already granted",
                     actionLabel = "Dismiss",
-                    duration = SnackbarDuration.Indefinite
+                    duration = SnackbarDuration.Short
                 )
-                Log.d("EmpowerSWR", "Snackbar shown with result: $result")
-                viewModel.removeNotification(notification)
-            } catch (e: Exception) {
-                Log.e("EmpowerSWR", "Failed to show Snackbar: ${e.message}", e)
-            }
-        }
-    }
-
-    LaunchedEffect(notificationFromIntent) {
-        val (title, body) = notificationFromIntent
-        if (title != null || body != null) {
-            Log.d("EmpowerSWR", "Showing Snackbar for intent notification: $title: $body")
-            try {
-                val result = snackbarHostState.showSnackbar(
-                    message = "$title: $body",
-                    actionLabel = "Dismiss",
-                    duration = SnackbarDuration.Indefinite
-                )
-                Log.d("EmpowerSWR", "Snackbar shown with result: $result")
-                viewModel.setNotificationFromIntent(null, null)
-            } catch (e: Exception) {
-                Log.e("EmpowerSWR", "Failed to show Snackbar: ${e.message}", e)
             }
         } else {
-            Log.d("EmpowerSWR", "No intent notification to display")
+            Log.d("EmpowerSWR", "Launching permission request")
+            permissionLauncher.launch(arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            ))
+        }
+    }
+
+    // Settings prompt dialog
+    if (showSettingsPrompt) {
+        AlertDialog(
+            onDismissRequest = {
+                showSettingsPrompt = false
+                Log.d("EmpowerSWR", "Settings dialog dismissed")
+            },
+            title = { Text("Permission Required") },
+            text = { Text("Location permission is required for check-in. Please enable it in app settings.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showSettingsPrompt = false
+                        val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                        intent.data = Uri.fromParts("package", context.packageName, null)
+                        settingsLauncher.launch(intent)
+                        Log.d("EmpowerSWR", "Opening app settings for permission")
+                    }
+                ) {
+                    Text("Open Settings")
+                }
+            },
+            dismissButton = {
+                Button(
+                    onClick = {
+                        showSettingsPrompt = false
+                        Log.d("EmpowerSWR", "Settings dialog cancelled")
+                    }
+                ) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    LaunchedEffect(loginErrorState) {
+        loginErrorState?.let { message ->
+            loginError = message
+            snackbarScope.launch {
+                try {
+                    val result = snackbarHostState.showSnackbar(
+                        message = message,
+                        actionLabel = "Dismiss",
+                        duration = SnackbarDuration.Long
+                    )
+                    Log.d("EmpowerSWR", "Login error Snackbar shown: $message, result: $result")
+                    viewModel.clearCheckInState()
+                } catch (e: Exception) {
+                    Log.e("EmpowerSWR", "Failed to show login error Snackbar: ${e.message}", e)
+                }
+            }
         }
     }
 
@@ -140,86 +187,92 @@ fun LoginScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(16.dp)
-                .verticalScroll(scrollState)
-                .imePadding(),
+                .padding(horizontal = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
+            Text(
+                text = "Login",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(16.dp))
             OutlinedTextField(
                 value = workerId,
-                onValueChange = { newValue -> workerId = newValue },
+                onValueChange = { workerId = it },
                 label = { Text("Worker ID") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
                 keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Number,
+                    keyboardType = KeyboardType.Text,
                     imeAction = ImeAction.Next
-                )
+                ),
+                modifier = Modifier.fillMaxWidth()
             )
             Spacer(modifier = Modifier.height(8.dp))
             OutlinedTextField(
                 value = pin,
-                onValueChange = { newValue -> pin = newValue },
+                onValueChange = { pin = it },
                 label = { Text("PIN") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.NumberPassword,
+                    keyboardType = KeyboardType.Number,
                     imeAction = ImeAction.Done
                 ),
                 keyboardActions = KeyboardActions(
                     onDone = {
                         keyboardController?.hide()
                         coroutineScope.launch {
-                            Log.d("EmpowerSWR", "Keyboard Done: Attempting login with workerId: $workerId, pin: $pin")
+                            Log.d("EmpowerSWR", "Login button clicked")
                             viewModel.login(workerId, pin)
+                            if (viewModel.token.value != null) {
+                                onLoginSuccess()
+                            }
                         }
                     }
-                )
+                ),
+                modifier = Modifier.fillMaxWidth()
             )
             Spacer(modifier = Modifier.height(16.dp))
             Button(
                 onClick = {
                     Log.d("EmpowerSWR", "Login button clicked")
-                    keyboardController?.hide()
                     coroutineScope.launch {
-                        Log.d("EmpowerSWR", "Coroutine launched for login")
                         viewModel.login(workerId, pin)
+                        if (viewModel.token.value != null) {
+                            onLoginSuccess()
+                        }
                     }
                 },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                enabled = workerId.isNotEmpty() && pin.isNotEmpty()
             ) {
                 Text("Login")
             }
-            loginError?.let { error ->
+            loginError?.let {
                 Spacer(modifier = Modifier.height(8.dp))
-                Text(error, color = MaterialTheme.colorScheme.error)
-            }
-            fcmError?.let { error ->
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("FCM Error: $error", color = MaterialTheme.colorScheme.error)
+                Text(
+                    text = it,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium
+                )
             }
             Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = "Not registered? Register with Passport/Surname",
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.clickable {
-                    navController.navigate("registration")
-                }
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "Forgot Worker ID or PIN? Call 555-1234 or email support@empowerswr.com",
-                color = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.clickable {
-                    val intent = Intent(Intent.ACTION_DIAL).apply {
-                        data = android.net.Uri.parse("tel:5551234")
+            Button(
+                onClick = {
+                    Log.d("EmpowerSWR", "Manual permission check button pressed")
+                    coroutineScope.launch {
+                        checkAndRequestLocationPermission()
                     }
-                    context.startActivity(intent)
-                }
-            )
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                enabled = ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.ACCESS_FINE_LOCATION
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                Text("Check Location Permission")
+            }
         }
     }
 }
