@@ -83,7 +83,9 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     //location
     implementation ("com.google.android.gms:play-services-location:21.3.0")
-
+    //documents
+    implementation("com.squareup.retrofit2:converter-scalars:2.9.0")
+    implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0-beta1")
     // Force specific versions to avoid conflicts
     configurations.all {
         resolutionStrategy {

@@ -7,34 +7,34 @@ import retrofit2.http.Query
 import retrofit2.http.Path
 
 interface EmpowerApi {
-    @POST("register")
+    @POST("api.php/register")
     suspend fun register(@Body request: RegistrationRequest): LoginResponse
 
-    @POST("login")
+    @POST("api.php/login")
     suspend fun login(@Body request: LoginRequest): LoginResponse
 
-    @GET("worker")
+    @GET("api.php/worker")
     suspend fun getWorkerDetails(@Query("token") token: String): WorkerResponse
 
-    @GET("alerts")
+    @GET("api.php/alerts")
     suspend fun getAlerts(@Query("token") token: String): List<Alert>
 
-    @POST("worker/update")
+    @POST("api.php/worker/update")
     suspend fun updateWorker(@Query("workerId") workerId: String, @Body request: WorkerUpdateRequest): WorkerUpdateResponse
 
-    @POST("checkin")
+    @POST("api.php/checkin")
     suspend fun checkIn(@Query("token") token: String, @Body request: CheckInRequest): CheckInResponse
 
-    @POST("update-fcm-token")
+    @POST("api.php/update-fcm-token")
     suspend fun updateFcmToken(@Query("workerId") workerId: String, @Body token: String)
 
-    @GET("teams")
+    @GET("api.php/teams")
     suspend fun getTeams(): List<TeamResponse>
 
-    @GET("history")
+    @GET("api.php/history")
     suspend fun getWorkerHistory(@Query("workerId") workerId: String): List<HistoryResponse>
 
-    @POST("location")
+    @POST("api.php/location")
     suspend fun saveLocation(
         @Query("token") token: String,
         @Body request: LocationRequest

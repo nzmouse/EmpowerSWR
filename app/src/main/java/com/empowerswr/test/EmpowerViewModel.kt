@@ -44,9 +44,8 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
     private val _notificationFromIntent = mutableStateOf(Pair<String?, String?>(null, null))
     val notificationFromIntent: State<Pair<String?, String?>> = _notificationFromIntent
 
-
     private val retrofit = Retrofit.Builder()
-        .baseUrl("https://db.nougro.com/api/api.php/")
+        .baseUrl("https://db.nougro.com/api/")
         .addConverterFactory(GsonConverterFactory.create())
         .build()
 
@@ -198,7 +197,8 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
                 Log.d("EmpowerSWR", "fetchWorkerDetails - Sending token: $token")
                 val response = api.getWorkerDetails(token)
                 _workerDetails.value = response
-                Log.d("EmpowerSWR", "fetchWorkerDetails - Success: ${response.firstName} ${response.surname}, notices=${response.notices}")
+                PrefsHelper.saveWorkerDetails(getApplication(), response.firstName, response.surname)
+                Log.d("EmpowerSWR", "fetchWorkerDetails - Success: ${response.firstName ?: "Unknown"} ${response.surname ?: "Unknown"}, notices=${response.notices}")
             } catch (e: Exception) {
                 Log.e("EmpowerSWR", "fetchWorkerDetails error: ${e.message}", e)
                 _workerDetails.value = null
@@ -231,7 +231,7 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val token = _token.value ?: throw IllegalStateException("No token available")
-                Log.d("EmpowerSWR", "fetchAlerts - Sending token: $token")
+                Log.d("EmpowerSWR", "fetchAlerts - sending token: $token")
                 val response = api.getAlerts(token)
                 _alerts.value = response
                 Log.d("EmpowerSWR", "fetchAlerts - Success, alerts count: ${response.size}")

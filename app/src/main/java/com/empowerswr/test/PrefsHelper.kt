@@ -1,6 +1,8 @@
 package com.empowerswr.test
 
+import android.app.Application
 import android.content.Context
+import android.util.Log
 
 object PrefsHelper {
     private const val PREFS_NAME = "EmpowerSWRPrefs"
@@ -69,5 +71,26 @@ object PrefsHelper {
             .remove(KEY_TOKEN_EXPIRY)
             .remove(KEY_WORKER_ID)
             .apply()
+    }
+    fun getWorkerDetails(context: Context): Pair<String, String> {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val givenName = prefs.getString("firstName", "Unknown") ?: "Unknown"
+        val surname = prefs.getString("surname", "Unknown") ?: "Unknown"
+        Log.d("EmpowerSWR", "Retrieved worker details: $givenName, $surname")
+        return Pair(givenName, surname)
+    }
+    fun saveWorkerDetails(context: Context, firstName: String?, surname: String?) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit()
+            .putString("firstName", firstName ?: "Unknown")
+            .putString("surname", surname ?: "Unknown")
+            .apply()
+        Log.d("EmpowerSWR", "Saved worker details: ${firstName ?: "Unknown"}, ${surname ?: "Unknown"}")
+    }
+    fun getJwtToken(context: Context): String {
+        val prefs = context.getSharedPreferences("EmpowerSWRPrefs", Context.MODE_PRIVATE)
+        val token = prefs.getString("token", "") ?: ""
+        Log.d("EmpowerSWR", "Retrieved JWT Token: $token")
+        return token
     }
 }

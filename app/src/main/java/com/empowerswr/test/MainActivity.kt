@@ -33,6 +33,7 @@ import com.empowerswr.test.ui.screens.HomeScreen
 import com.empowerswr.test.ui.screens.WorkerDetailsScreen
 import com.empowerswr.test.ui.screens.WorkLocationScreen
 import com.empowerswr.test.ui.screens.ContractsScreen
+import com.empowerswr.test.ui.screens.DocumentsScreen
 import com.empowerswr.test.ui.screens.UpdateDetailsScreen
 import com.empowerswr.test.ui.screens.InformationScreen
 import com.empowerswr.test.ui.screens.SettingsScreen
@@ -40,6 +41,8 @@ import com.empowerswr.test.ui.theme.EmpowerSWRTheme
 import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import com.empowerswr.test.network.NetworkModule
+import com.empowerswr.test.network.NetworkModule.uploadService
 
 class MainActivity : ComponentActivity() {
     private val viewModel: EmpowerViewModel by viewModels {
@@ -140,6 +143,7 @@ val navItems = listOf(
     NavItem("Work Location", Icons.Filled.LocationOn, "work_location"),
     NavItem("Contracts", Icons.Filled.Description, "contracts"),
     NavItem("Update Details", Icons.Filled.Edit, "update_details"),
+    NavItem("Documents", Icons.Filled.FileCopy, "documents"),
     NavItem("Information", Icons.Filled.Info, "information"),
     NavItem("Settings", Icons.Filled.Settings, "settings")
 )
@@ -304,6 +308,10 @@ fun AppNavigation(
             }
             composable("settings") {
                 SettingsScreen()
+            }
+            composable("documents") { DocumentsScreen(uploadService = NetworkModule.uploadService) }
+            composable("documents") {
+                DocumentsScreen(uploadService = uploadService)
             }
         }
     }
