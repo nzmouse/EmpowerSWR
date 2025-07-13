@@ -1,8 +1,8 @@
 plugins {
-    id("com.android.application")
-    id("org.jetbrains.kotlin.android")
-    id("org.jetbrains.kotlin.plugin.compose")
-    id("com.google.gms.google-services")
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.google.services)
 }
 
 android {
@@ -14,17 +14,13 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 1
-        versionName = "0.2"
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        versionName = "1.0"
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-        }
-        debug {
-            isMinifyEnabled = false
         }
     }
 
@@ -42,57 +38,25 @@ android {
     }
 
     composeOptions {
-        kotlinCompilerExtensionVersion = "2.0.20"
-    }
-
-    lint {
-        abortOnError = false
-        checkReleaseBuilds = false
+        kotlinCompilerExtensionVersion = "2.0.21"
     }
 }
 
 dependencies {
-    implementation(libs.androidx.core.ktx)
     implementation(platform(libs.androidx.compose.bom))
-    //noinspection UseTomlInstead
-    implementation("androidx.activity:activity-compose:1.10.1")
-    //noinspection UseTomlInstead
-    implementation("androidx.compose.material3:material3:1.3.2")
-    //noinspection UseTomlInstead
-    implementation("androidx.compose.ui:ui:1.8.3")
-    implementation("androidx.compose.runtime:runtime:1.8.3")
-    implementation("androidx.compose.runtime:runtime-livedata:1.8.3")
-    implementation("androidx.compose.ui:ui-tooling-preview:1.8.3")
-    debugImplementation("androidx.compose.ui:ui-tooling:1.7.0")
-    implementation("androidx.compose.foundation:foundation:1.7.0")
-    implementation("androidx.compose.material:material-icons-extended:1.7.0")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
-    implementation("com.squareup.retrofit2:retrofit:2.11.0")
-    implementation("com.squareup.retrofit2:converter-gson:2.11.0")
-    implementation("com.google.code.gson:gson:2.10.1")
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
-    implementation(platform("com.google.firebase:firebase-bom:33.2.0"))
-    implementation("com.google.firebase:firebase-messaging-ktx")
-    implementation("com.google.firebase:firebase-analytics-ktx")
-    implementation("androidx.security:security-crypto:1.0.0")
-    implementation("io.jsonwebtoken:jjwt:0.12.6")
-    implementation("androidx.navigation:navigation-compose:2.8.0")
-    testImplementation("junit:junit:4.13.2")
-    //location
-    implementation ("com.google.android.gms:play-services-location:21.3.0")
-    //documents
-    implementation("com.squareup.retrofit2:converter-scalars:2.9.0")
-    implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0-beta1")
-    // Force specific versions to avoid conflicts
-    configurations.all {
-        resolutionStrategy {
-            force("androidx.activity:activity:1.10.1")
-            force("androidx.activity:activity-compose:1.10.1")
-            force("androidx.activity:activity-ktx:1.10.1")
-        }
-    }
+    implementation(libs.bundles.compose)
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.bundles.retrofit)
+    implementation(libs.bundles.okhttp)
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.bundles.firebase)
+    implementation(libs.androidx.security.crypto)
+    implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.java.jwt)
 
+    debugImplementation(libs.androidx.compose.ui.tooling)
 }

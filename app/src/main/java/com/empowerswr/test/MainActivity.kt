@@ -309,9 +309,8 @@ fun AppNavigation(
             composable("settings") {
                 SettingsScreen()
             }
-            composable("documents") { DocumentsScreen(uploadService = NetworkModule.uploadService) }
             composable("documents") {
-                DocumentsScreen(uploadService = uploadService)
+                DocumentsScreen(uploadService = NetworkModule.uploadService, navController = navController)
             }
         }
     }

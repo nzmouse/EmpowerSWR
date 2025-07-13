@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/nav_graph"
+    app:startDestination="@id/documentListScreen">
+
+    <composable
+        android:id="@+id/documentListScreen"
+        app:route="documentListScreen" />
+
+    <composable
+        android:id="@+id/documentViewerScreen"
+        app:route="documentViewerScreen/{filename}">
+        <argument
+            android:name="filename"
+            app:argType="string" />
+    </composable>
+</navigation>

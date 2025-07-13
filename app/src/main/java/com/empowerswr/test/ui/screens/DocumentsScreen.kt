@@ -2,6 +2,7 @@ package com.empowerswr.test.ui.screens
 
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -16,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.navigation.NavController
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanner
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
@@ -29,9 +31,13 @@ import okhttp3.RequestBody.Companion.asRequestBody
 import retrofit2.HttpException
 import java.io.File
 import android.util.Log
+import com.empowerswr.test.network.NetworkModule
 
 @Composable
-fun DocumentsScreen(uploadService: UploadService) {
+fun DocumentsScreen(
+    uploadService: UploadService = NetworkModule.uploadService,
+    navController: NavController? = null
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -39,14 +45,14 @@ fun DocumentsScreen(uploadService: UploadService) {
     var selectedDocumentType by remember { mutableStateOf("") }
     val documentTypes = listOf(
         "Passport" to "PPT",
-        "National ID Card" to "NID",
-        "Birth Certificate" to "BC",
-        "Driving Licence" to "DL",
-        "Police Clearance" to "PC",
-        "Medical" to "MED",
-        "Contract" to "CON",
-        "Spouse Letter" to "SPO",
-        "Chief/Pastor Letter" to "REF"
+    "National ID Card" to "NID",
+    "Birth Certificate" to "BC",
+    "Driving Licence" to "DL",
+    "Police Clearance" to "PC",
+    "Medical" to "MED",
+    "Contract" to "CON",
+    "Spouse Letter" to "SPO",
+    "Chief/Pastor Letter" to "REF"
     )
 
     var expanded by remember { mutableStateOf(false) }
@@ -244,6 +250,7 @@ fun DocumentsScreen(uploadService: UploadService) {
                 Spacer(modifier = Modifier.height(16.dp))
                 CircularProgressIndicator()
             }
+
         }
     }
 }
@@ -254,18 +261,17 @@ private suspend fun uploadFile(
     docType: String,
     docTypes: List<Pair<String, String>>,
     uploadService: UploadService,
-    isScanned: Boolean // Added to distinguish scanned files
+    isScanned: Boolean
 ) {
     Log.d("EmpowerSWR", "Starting upload for docType: $docType, uri: $uri, isScanned: $isScanned")
     val contentResolver = context.contentResolver
     val (givenName, surname) = PrefsHelper.getWorkerDetails(context)
-    // Capitalize first letter of each word in givenName and surname
     val capitalizedGivenName = givenName.split(" ").joinToString(" ") { it.lowercase().replaceFirstChar { it.uppercaseChar() } }
-    val capitalizedSurname = surname.split(" ").joinToString(" ") { it.lowercase().replaceFirstChar { it.uppercaseChar() } }val code = docTypes.find { it.first == docType }?.second ?: run {
+    val capitalizedSurname = surname.split(" ").joinToString(" ") { it.lowercase().replaceFirstChar { it.uppercaseChar() } }
+    val code = docTypes.find { it.first == docType }?.second ?: run {
         Log.e("EmpowerSWR", "Invalid docType: $docType")
         return
     }
-    // Use .pdf for scanned documents, determine extension for file picker
     val extension = if (isScanned) {
         "pdf"
     } else {
@@ -304,7 +310,7 @@ private suspend fun uploadFile(
     val token = PrefsHelper.getJwtToken(context)
     Log.d("EmpowerSWR", "Sending request with token: $token")
     try {
-        val response = uploadService.uploadFile("Bearer $token", body)
+        val response = uploadService.uploadFile("Bearer $token", body, "false")
         Log.d("EmpowerSWR", "Upload response: $response")
     } catch (e: HttpException) {
         Log.e("EmpowerSWR", "Upload failed: HTTP ${e.code()} ${e.message()}", e)

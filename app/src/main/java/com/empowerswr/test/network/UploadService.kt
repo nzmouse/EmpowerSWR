@@ -11,6 +11,7 @@ interface UploadService {
     @POST("uploads.php")
     suspend fun uploadFile(
         @Header("Authorization") token: String,
-        @Part file: MultipartBody.Part
+        @Part file: MultipartBody.Part,
+        @Header("X-Is-Signed") isSigned: String = "false"
     ): String
 }
