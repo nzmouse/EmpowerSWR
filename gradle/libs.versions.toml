@@ -16,6 +16,7 @@ compose-bom = "2025.06.01"
 media3-exoplayer = "1.7.1"
 java-jwt = "4.5.0"
 mlkit-document-scanner = "16.0.0-beta1"
+play-services-location = "21.3.0"
 
 [libraries]
 # Core Android
@@ -72,8 +73,10 @@ java-jwt = { group = "com.auth0", name = "java-jwt", version.ref = "java-jwt" }
 
 # ML Kit
 mlkit-document-scanner = { group = "com.google.android.gms", name = "play-services-mlkit-document-scanner", version.ref = "mlkit-document-scanner" }
-[bundles]
 
+play-services-location = { group = "com.google.android.gms", name = "play-services-location", version.ref = "play-services-location" }
+
+[bundles]
 retrofit = ["retrofit", "retrofit-converter-gson", "retrofit-converter-scalars", "gson"]
 okhttp = ["okhttp", "okhttp-logging-interceptor"]
 firebase = ["firebase-messaging-ktx", "firebase-analytics-ktx"]
