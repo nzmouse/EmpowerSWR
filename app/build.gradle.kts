@@ -63,6 +63,7 @@ dependencies {
     implementation (libs.material)
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.retrofit.converter.scalars)
+    implementation(libs.mlkit.document.scanner)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 }
