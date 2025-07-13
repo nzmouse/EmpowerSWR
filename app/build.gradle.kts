@@ -12,6 +12,7 @@ kotlin {
         jvmTarget.set(JvmTarget.fromTarget("17"))  // Replace "17" with your value
     }
 }
+
 android {
     namespace = "com.empowerswr.test"
     compileSdk = 35
@@ -65,5 +66,8 @@ dependencies {
     implementation(libs.retrofit.converter.scalars)
     implementation(libs.mlkit.document.scanner)
     implementation(libs.play.services.location)
+    implementation(libs.pdf.viewer)
+    implementation(libs.signature.pad)
+    implementation(libs.itext7.core)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

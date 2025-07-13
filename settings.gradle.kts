@@ -18,7 +18,9 @@ dependencyResolutionManagement {
         mavenCentral()
         maven { url = uri("https://maven.google.com/") }
         maven { url = uri("https://jitpack.io") }
-        maven { url = uri("https://repo.itextsupport.com/android") }
+        maven { url = uri("https://repo.itextsupport.com/release") }
+        maven { url = uri("https://repository.liferay.com/nexus/content/repositories/public") } //Fallback
+
     }
 }
 
