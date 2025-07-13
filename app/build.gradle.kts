@@ -60,7 +60,9 @@ dependencies {
     implementation(libs.androidx.security.crypto)
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.java.jwt)
-    implementation ("com.google.android.material:material:1.12.0")
+    implementation (libs.material)
+    implementation(libs.androidx.compose.material.icons.extended)
+    implementation(libs.retrofit.converter.scalars)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

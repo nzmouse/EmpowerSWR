@@ -5,9 +5,10 @@ core-ktx = "1.16.0"
 activity-compose = "1.10.1"
 lifecycle = "2.9.1"
 coroutines = "1.10.2"
-retrofit = "3.0.0"
+material = "1.12.0"
+retrofit = "3.0.0" # Note: Your version; 2.11.0 was used earlier
 gson = "2.13.1"
-okhttp = "5.1.0"
+okhttp = "5.1.0" # Note: Your version; 4.12.0 was used earlier
 firebase-bom = "33.16.0"
 security-crypto = "1.0.0"
 navigation = "2.9.1"
@@ -25,6 +26,7 @@ androidx-navigation-compose = { group = "androidx.navigation", name = "navigatio
 # Jetpack Compose (managed by BOM)
 androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "compose-bom" }
 androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+androidx-compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
 androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }
 androidx-compose-runtime = { group = "androidx.compose.runtime", name = "runtime" }
 androidx-compose-runtime-livedata = { group = "androidx.compose.runtime", name = "runtime-livedata" }
@@ -40,9 +42,13 @@ androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecyc
 # Coroutines
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 
+# Material
+material = { group = "com.google.android.material", name = "material", version.ref = "material" }
+
 # Retrofit
 retrofit = { group = "com.squareup.retrofit2", name = "retrofit", version.ref = "retrofit" }
 retrofit-converter-gson = { group = "com.squareup.retrofit2", name = "converter-gson", version.ref = "retrofit" }
+retrofit-converter-scalars = { group = "com.squareup.retrofit2", name = "converter-scalars", version.ref = "retrofit" }
 gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
 
 # OkHttp
@@ -64,7 +70,7 @@ androidx-media3-exoplayer = { group = "androidx.media3", name = "media3-exoplaye
 java-jwt = { group = "com.auth0", name = "java-jwt", version.ref = "java-jwt" }
 
 [bundles]
-retrofit = ["retrofit", "retrofit-converter-gson", "gson"]
+retrofit = ["retrofit", "retrofit-converter-gson", "retrofit-converter-scalars", "gson"]
 okhttp = ["okhttp", "okhttp-logging-interceptor"]
 firebase = ["firebase-messaging-ktx", "firebase-analytics-ktx"]
 compose = ["androidx-compose-material3", "androidx-compose-ui", "androidx-compose-runtime", "androidx-compose-runtime-livedata", "androidx-compose-ui-tooling-preview", "androidx-compose-ui-tooling", "androidx-compose-foundation", "androidx-activity-compose"]
