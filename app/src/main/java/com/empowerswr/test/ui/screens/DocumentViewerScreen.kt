@@ -13,6 +13,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -161,7 +164,7 @@ fun DocumentViewerScreen(navController: NavController, filename: String) {
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
                         Icon(
-                            imageVector = Icons.Default.ArrowBack,
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
                             tint = MaterialTheme.colorScheme.onPrimary
                         )
@@ -352,14 +355,14 @@ fun DocumentViewerScreen(navController: NavController, filename: String) {
                     onClick = { if (currentPage > 1) currentPage-- },
                     enabled = currentPage > 1
                 ) {
-                    Icon(Icons.Default.KeyboardArrowLeft, contentDescription = "Previous Page")
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Previous Page")
                 }
                 Text("Page $currentPage of $totalPages")
                 IconButton(
                     onClick = { if (currentPage < totalPages) currentPage++ },
                     enabled = currentPage < totalPages
                 ) {
-                    Icon(Icons.Default.KeyboardArrowRight, contentDescription = "Next Page")
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Next Page")
                 }
             }
 
@@ -405,7 +408,7 @@ fun DocumentViewerScreen(navController: NavController, filename: String) {
                     ) {
                         formFields.forEach { field ->
                             DropdownMenuItem(
-                                content = { Text(field) },
+                                text = { Text(field) }, // Changed from content
                                 onClick = {
                                     selectedField = field
                                     expanded = false
@@ -433,7 +436,8 @@ fun DocumentViewerScreen(navController: NavController, filename: String) {
                                             }
                                         }
                                     }
-                                }
+                                },
+                                modifier = Modifier.fillMaxWidth() // Optional, for consistency with DocumentsScreen.kt
                             )
                         }
                     }
@@ -704,7 +708,7 @@ private fun signPdf(
         // Apply form field (checkbox) if selected
         selectedField?.let { fieldName ->
             val field = form.getField(fieldName)
-            if (field != null && field is PdfFormField) {
+            if (field != null) {
                 val validState = when {
                     field.getValueAsString() in listOf("Yes", "On") -> "Yes"
                     else -> "On"
