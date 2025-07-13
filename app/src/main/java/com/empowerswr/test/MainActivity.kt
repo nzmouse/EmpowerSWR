@@ -13,6 +13,14 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.LocationOn
+import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -138,14 +146,14 @@ data class NavItem(
 )
 
 val navItems = listOf(
-    NavItem("Home", Icons.Filled.Home, "home"),
-    NavItem("Profile", Icons.Filled.Person, "profile"),
-    NavItem("Work Location", Icons.Filled.LocationOn, "work_location"),
-    NavItem("Contracts", Icons.Filled.Description, "contracts"),
-    NavItem("Update Details", Icons.Filled.Edit, "update_details"),
-    NavItem("Documents", Icons.Filled.FileCopy, "documents"),
-    NavItem("Information", Icons.Filled.Info, "information"),
-    NavItem("Settings", Icons.Filled.Settings, "settings")
+    NavItem("Home", Icons.Outlined.Home, "home"),
+    NavItem("Profile", Icons.Outlined.Person, "profile"),
+    NavItem("Work Location", Icons.Outlined.LocationOn, "work_location"),
+    NavItem("Contracts", Icons.Outlined.ThumbUp, "contracts"),
+    NavItem("Update Details", Icons.Outlined.Edit, "update_details"),
+    NavItem("Documents", Icons.Outlined.Menu, "documents"),
+    NavItem("Information", Icons.Outlined.Info, "information"),
+    NavItem("Settings", Icons.Outlined.Settings, "settings")
 )
 
 @OptIn(ExperimentalMaterial3Api::class)

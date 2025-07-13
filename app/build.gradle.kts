@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -5,6 +7,11 @@ plugins {
     alias(libs.plugins.google.services)
 }
 
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.fromTarget("17"))  // Replace "17" with your value
+    }
+}
 android {
     namespace = "com.empowerswr.test"
     compileSdk = 35
@@ -27,10 +34,6 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = "17"
     }
 
     buildFeatures {
@@ -57,6 +60,7 @@ dependencies {
     implementation(libs.androidx.security.crypto)
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.java.jwt)
+    implementation ("com.google.android.material:material:1.12.0")
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

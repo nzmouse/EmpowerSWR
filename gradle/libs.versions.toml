@@ -1,19 +1,19 @@
 [versions]
-agp = "8.7.1"
-kotlin = "2.0.21"
-core-ktx = "1.15.0"
-activity-compose = "1.10.0"
-lifecycle = "2.8.6"
-coroutines = "1.9.0"
-retrofit = "2.11.0"
-gson = "2.11.0"
-okhttp = "4.12.0"
-firebase-bom = "33.5.1"
+agp = "8.11.1"
+kotlin = "2.2.0"
+core-ktx = "1.16.0"
+activity-compose = "1.10.1"
+lifecycle = "2.9.1"
+coroutines = "1.10.2"
+retrofit = "3.0.0"
+gson = "2.13.1"
+okhttp = "5.1.0"
+firebase-bom = "33.16.0"
 security-crypto = "1.0.0"
-navigation = "2.8.3"
-compose-bom = "2024.10.01"
-media3-exoplayer = "1.4.1"
-java-jwt = "4.4.0"
+navigation = "2.9.1"
+compose-bom = "2025.06.01"
+media3-exoplayer = "1.7.1"
+java-jwt = "4.5.0"
 
 [libraries]
 # Core Android
@@ -73,4 +73,4 @@ compose = ["androidx-compose-material3", "androidx-compose-ui", "androidx-compos
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
-google-services = { id = "com.google.gms.google-services", version = "4.4.2" }
+google-services = { id = "com.google.gms.google-services", version = "4.4.3" }
