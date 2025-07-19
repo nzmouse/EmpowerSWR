@@ -51,6 +51,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.empowerswr.test.network.NetworkModule
 import com.empowerswr.test.network.NetworkModule.uploadService
+import com.empowerswr.test.ui.screens.DocumentListScreen
+import com.empowerswr.test.ui.screens.DocumentSignerScreen
+import com.empowerswr.test.ui.screens.DocumentViewerScreen
 
 class MainActivity : ComponentActivity() {
     private val viewModel: EmpowerViewModel by viewModels {
@@ -319,6 +322,25 @@ fun AppNavigation(
             }
             composable("documents") {
                 DocumentsScreen(uploadService = NetworkModule.uploadService, navController = navController)
+            }
+            composable("document-list") {
+                DocumentListScreen(
+                    navController = navController,
+                    context = context
+                )
+            }
+            composable("document-viewer/{filename}") { backStackEntry ->
+                DocumentViewerScreen(
+                    navController = navController,
+                    filename = backStackEntry.arguments?.getString("filename") ?: ""
+                )
+            }
+            composable("document-signer/{filename}") { backStackEntry ->
+                DocumentSignerScreen(
+                    navController = navController,
+                    filename = backStackEntry.arguments?.getString("filename") ?: "",
+                    context = context
+                )
             }
         }
     }

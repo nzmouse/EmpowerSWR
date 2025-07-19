@@ -15,7 +15,7 @@ kotlin {
 
 android {
     namespace = "com.empowerswr.test"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.empowerswr.test"
@@ -44,6 +44,7 @@ android {
     composeOptions {
         kotlinCompilerExtensionVersion = "2.0.21"
     }
+    ndkVersion = "29.0.13599879 rc2"
 }
 
 dependencies {

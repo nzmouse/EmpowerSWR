@@ -45,14 +45,15 @@ fun DocumentsScreen(
     var selectedDocumentType by remember { mutableStateOf("") }
     val documentTypes = listOf(
         "Passport" to "PPT",
-    "National ID Card" to "NID",
-    "Birth Certificate" to "BC",
-    "Driving Licence" to "DL",
-    "Police Clearance" to "PC",
-    "Medical" to "MED",
-    "Contract" to "CON",
-    "Spouse Letter" to "SPO",
-    "Chief/Pastor Letter" to "REF"
+        "DFAT Privacy/Consent" to "PRI",
+        "National ID Card" to "NID",
+        "Birth Certificate" to "BC",
+        "Driving Licence" to "DL",
+        "Police Clearance" to "PC",
+        "Medical" to "MED",
+        "Contract" to "CON",
+        "Spouse Letter" to "SPO",
+        "Chief/Pastor Letter" to "REF"
     )
 
     var expanded by remember { mutableStateOf(false) }
@@ -141,116 +142,164 @@ fun DocumentsScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .padding(16.dp),
-            verticalArrangement = Arrangement.Center,
+            verticalArrangement = Arrangement.spacedBy(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Box {
-                OutlinedTextField(
-                    value = selectedDocumentType,
-                    onValueChange = { },
-                    label = { Text("Select Document Type") },
-                    modifier = Modifier.fillMaxWidth(),
-                    readOnly = true,
-                    trailingIcon = {
-                        IconButton(onClick = {
-                            Log.d("EmpowerSWR", "Dropdown clicked")
-                            expanded = true
-                        }) {
-                            Icon(
-                                imageVector = Icons.Default.ArrowDropDown,
-                                contentDescription = "Dropdown"
-                            )
-                        }
-                    }
+            // Upload Section
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
                 )
-                DropdownMenu(
-                    expanded = expanded,
-                    onDismissRequest = {
-                        Log.d("EmpowerSWR", "Dropdown dismissed")
-                        expanded = false
-                    }
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    documentTypes.forEach { (type, _) ->
-                        DropdownMenuItem(
-                            text = { Text(type) },
-                            onClick = {
-                                Log.d("EmpowerSWR", "Selected document type: $type")
-                                selectedDocumentType = type
-                                expanded = false
+                    Text(
+                        text = "Upload",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Box {
+                        OutlinedTextField(
+                            value = selectedDocumentType,
+                            onValueChange = { },
+                            label = { Text("Select Document Type") },
+                            modifier = Modifier.fillMaxWidth(),
+                            readOnly = true,
+                            trailingIcon = {
+                                IconButton(onClick = {
+                                    Log.d("EmpowerSWR", "Dropdown clicked")
+                                    expanded = true
+                                }) {
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowDropDown,
+                                        contentDescription = "Dropdown"
+                                    )
+                                }
                             }
                         )
+                        DropdownMenu(
+                            expanded = expanded,
+                            onDismissRequest = {
+                                Log.d("EmpowerSWR", "Dropdown dismissed")
+                                expanded = false
+                            }
+                        ) {
+                            documentTypes.forEach { (type, _) ->
+                                DropdownMenuItem(
+                                    text = { Text(type) },
+                                    onClick = {
+                                        Log.d("EmpowerSWR", "Selected document type: $type")
+                                        selectedDocumentType = type
+                                        expanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                Log.d("EmpowerSWR", "Scan Document button clicked")
+                                if (selectedDocumentType.isEmpty()) {
+                                    Toast.makeText(context, "Select a document type", Toast.LENGTH_SHORT).show()
+                                    Log.w("EmpowerSWR", "Scan failed: No document type selected")
+                                } else {
+                                    val token = PrefsHelper.getJwtToken(context)
+                                    if (token.isEmpty()) {
+                                        Toast.makeText(context, "Please log in to scan documents", Toast.LENGTH_SHORT).show()
+                                        Log.w("EmpowerSWR", "Scan failed: No valid JWT")
+                                    } else {
+                                        val activity = context as? Activity
+                                        if (activity != null) {
+                                            scanner.getStartScanIntent(activity)
+                                                .addOnSuccessListener { intentSender ->
+                                                    Log.d("EmpowerSWR", "Scanner intent created")
+                                                    scannerLauncher.launch(
+                                                        IntentSenderRequest.Builder(intentSender).build()
+                                                    )
+                                                }
+                                                .addOnFailureListener { e ->
+                                                    Toast.makeText(context, "Failed to start scanner: ${e.message}", Toast.LENGTH_SHORT).show()
+                                                    Log.e("EmpowerSWR", "Scanner failed to start: ${e.message}", e)
+                                                }
+                                        } else {
+                                            Toast.makeText(context, "Activity context required", Toast.LENGTH_SHORT).show()
+                                            Log.e("EmpowerSWR", "Scan failed: No activity context")
+                                        }
+                                    }
+                                }
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Scan Document")
+                        }
+                        Button(
+                            onClick = {
+                                Log.d("EmpowerSWR", "Upload Document button clicked")
+                                if (selectedDocumentType.isEmpty()) {
+                                    Toast.makeText(context, "Select a document type", Toast.LENGTH_SHORT).show()
+                                    Log.w("EmpowerSWR", "Upload failed: No document type selected")
+                                } else {
+                                    val token = PrefsHelper.getJwtToken(context)
+                                    if (token.isEmpty()) {
+                                        Toast.makeText(context, "Please log in to upload documents", Toast.LENGTH_SHORT).show()
+                                        Log.w("EmpowerSWR", "Upload failed: No valid JWT")
+                                    } else {
+                                        Log.d("EmpowerSWR", "Launching file picker")
+                                        filePicker.launch("application/pdf,image/jpeg,image/png")
+                                    }
+                                }
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Upload Document")
+                        }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
-
+            // Ol Dokumen Blong Mi Button
             Button(
                 onClick = {
-                    Log.d("EmpowerSWR", "Scan Document button clicked")
-                    if (selectedDocumentType.isEmpty()) {
-                        Toast.makeText(context, "Select a document type", Toast.LENGTH_SHORT).show()
-                        Log.w("EmpowerSWR", "Scan failed: No document type selected")
-                    } else {
-                        val token = PrefsHelper.getJwtToken(context)
-                        if (token.isEmpty()) {
-                            Toast.makeText(context, "Please log in to scan documents", Toast.LENGTH_SHORT).show()
-                            Log.w("EmpowerSWR", "Scan failed: No valid JWT")
+                    Log.d("EmpowerSWR", "Ol Dokumen Blong Mi button clicked")
+                    try {
+                        if (navController == null) {
+                            Log.e("EmpowerSWR", "Navigation failed: navController is null")
+                            Toast.makeText(context, "Navigation not available", Toast.LENGTH_SHORT).show()
                         } else {
-                            val activity = context as? Activity
-                            if (activity != null) {
-                                scanner.getStartScanIntent(activity)
-                                    .addOnSuccessListener { intentSender ->
-                                        Log.d("EmpowerSWR", "Scanner intent created")
-                                        scannerLauncher.launch(
-                                            IntentSenderRequest.Builder(intentSender).build()
-                                        )
-                                    }
-                                    .addOnFailureListener { e ->
-                                        Toast.makeText(context, "Failed to start scanner: ${e.message}", Toast.LENGTH_SHORT).show()
-                                        Log.e("EmpowerSWR", "Scanner failed to start: ${e.message}", e)
-                                    }
-                            } else {
-                                Toast.makeText(context, "Activity context required", Toast.LENGTH_SHORT).show()
-                                Log.e("EmpowerSWR", "Scan failed: No activity context")
-                            }
+                            Log.d("EmpowerSWR", "Navigating to document-list")
+                            navController.navigate("document-list")
                         }
+                    } catch (e: IllegalArgumentException) {
+                        Log.e("EmpowerSWR", "Navigation failed: Invalid destination document-list", e)
+                        Toast.makeText(context, "Error: Invalid navigation destination", Toast.LENGTH_SHORT).show()
+                    } catch (e: Exception) {
+                        Log.e("EmpowerSWR", "Navigation failed: ${e.message}", e)
+                        Toast.makeText(context, "Navigation error: ${e.message}", Toast.LENGTH_SHORT).show()
                     }
                 },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.secondary
+                )
             ) {
-                Text("Scan Document")
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Button(
-                onClick = {
-                    Log.d("EmpowerSWR", "Upload Document button clicked")
-                    if (selectedDocumentType.isEmpty()) {
-                        Toast.makeText(context, "Select a document type", Toast.LENGTH_SHORT).show()
-                        Log.w("EmpowerSWR", "Upload failed: No document type selected")
-                    } else {
-                        val token = PrefsHelper.getJwtToken(context)
-                        if (token.isEmpty()) {
-                            Toast.makeText(context, "Please log in to upload documents", Toast.LENGTH_SHORT).show()
-                            Log.w("EmpowerSWR", "Upload failed: No valid JWT")
-                        } else {
-                            Log.d("EmpowerSWR", "Launching file picker")
-                            filePicker.launch("application/pdf,image/jpeg,image/png")
-                        }
-                    }
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Upload Document")
+                Text(
+                    text = "Ol Dokumen Blong Mi",
+                    style = MaterialTheme.typography.labelLarge
+                )
             }
 
             if (isUploading) {
-                Spacer(modifier = Modifier.height(16.dp))
                 CircularProgressIndicator()
             }
-
         }
     }
 }
