@@ -6,15 +6,20 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.google.gson.Gson
+import com.google.gson.JsonParseException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 import retrofit2.HttpException
+import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import java.net.UnknownHostException
-import com.google.gson.Gson
 import java.util.Base64
+import okhttp3.OkHttpClient
+import okhttp3.logging.HttpLoggingInterceptor
 
 class EmpowerViewModel(application: Application) : AndroidViewModel(application) {
     private val _token = mutableStateOf<String?>(null)
@@ -44,11 +49,18 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
     private val _notificationFromIntent = mutableStateOf(Pair<String?, String?>(null, null))
     val notificationFromIntent: State<Pair<String?, String?>> = _notificationFromIntent
 
-    private val retrofit = Retrofit.Builder()
-        .baseUrl("https://db.nougro.com/api/")
-        .addConverterFactory(GsonConverterFactory.create())
+    private val logging = HttpLoggingInterceptor().apply {
+        setLevel(HttpLoggingInterceptor.Level.BODY)
+    }
+    private val client = OkHttpClient.Builder()
+        .addInterceptor(logging)
         .build()
 
+    private val retrofit = Retrofit.Builder()
+        .baseUrl("https://db.nougro.com/api/")
+        .client(client)
+        .addConverterFactory(GsonConverterFactory.create())
+        .build()
     private val api = retrofit.create(EmpowerApi::class.java)
 
     private val gson = Gson()
@@ -101,26 +113,47 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
     fun register(passport: String, surname: String, pin: String) {
         viewModelScope.launch {
             try {
-                val response = api.register(RegistrationRequest(passport, surname, pin))
-                Log.d("EmpowerSWR", "register - Received token: ${response.token}")
-                if (!isValidJwt(response.token)) {
-                    throw IllegalStateException("Invalid JWT token received from register")
+                val request = RegistrationRequest(passport, surname, pin)
+                Log.d("EmpowerSWR", "Sending registration request: $request")
+                val response: Response<RegistrationResponse> = api.register(request)
+                Log.d("EmpowerSWR", "Registration response: code=${response.code()}, body=${response.body()}")
+                val errorBody = response.errorBody()?.string() // Store errorBody once
+                Log.d("EmpowerSWR", "Raw error body: $errorBody")
+                if (response.isSuccessful) {
+                    response.body()?.let { tokenResponse ->
+                        _token.value = tokenResponse.token
+                        PrefsHelper.saveWorkerId(getApplication(), tokenResponse.workerId)
+                        PrefsHelper.saveToken(getApplication(), tokenResponse.token, tokenResponse.expiry)
+                        Log.d("EmpowerSWR", "Registration successful: workerId=${tokenResponse.workerId}")
+                        fetchWorkerDetails()
+                        fetchHistory()
+                        fetchAlerts()
+                    }
+                } else {
+                    val errorMessage = errorBody?.let {
+                        try {
+                            val jsonObject = JSONObject(it)
+                            jsonObject.optString("error", "Registration failed: Unknown error")
+                        } catch (e: Exception) {
+                            Log.e("EmpowerSWR", "Failed to parse error JSON: ${e.message}, errorBody=$errorBody")
+                            "Registration failed: Invalid server response"
+                        }
+                    } ?: "Registration failed: HTTP ${response.code()}"
+                    _loginError.value = errorMessage
+                    Log.e("EmpowerSWR", "Registration error: HTTP ${response.code()}, errorMessage=$errorMessage")
                 }
-                _token.value = response.token
-                PrefsHelper.saveWorkerId(getApplication(), response.workerId)
-                PrefsHelper.saveToken(getApplication(), response.token, response.expiry)
-                PrefsHelper.setRegistered(getApplication(), true)
-                _loginError.value = null
-                fetchWorkerDetails()
-                fetchHistory()
-                fetchAlerts()
+            } catch (e: JsonParseException) {
+                _loginError.value = "Registration failed: Invalid server response"
+                Log.e("EmpowerSWR", "JSON parsing error: ${e.message}", e)
+            } catch (e: HttpException) {
+                _loginError.value = "Registration failed: HTTP ${e.code()} - ${e.message()}"
+                Log.e("EmpowerSWR", "Registration failed: ${e.message}", e)
+            } catch (e: UnknownHostException) {
+                _loginError.value = "Registration failed: Unable to connect to server"
+                Log.e("EmpowerSWR", "Registration failed: ${e.message}", e)
             } catch (e: Exception) {
-                _loginError.value = when (e) {
-                    is UnknownHostException -> "Registration failed: Unable to connect to server."
-                    is HttpException -> "Registration failed: HTTP ${e.code()} - ${e.message()}"
-                    else -> "Registration failed: ${e.message}"
-                }
-                Log.e("EmpowerSWR", "Registration error: ${e.message}", e)
+                _loginError.value = "Registration failed: ${e.message}"
+                Log.e("EmpowerSWR", "Registration failed: ${e.message}", e)
             }
         }
     }

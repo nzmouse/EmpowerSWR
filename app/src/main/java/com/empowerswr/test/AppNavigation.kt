@@ -7,6 +7,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.compose.ui.platform.LocalContext
 import com.empowerswr.test.ui.screens.HomeScreen
 import com.empowerswr.test.ui.screens.LoginScreen
+import com.empowerswr.test.ui.screens.RegistrationScreen
 import com.empowerswr.test.ui.screens.WorkerDetailsScreen
 
 @Composable
@@ -17,8 +18,16 @@ fun AppNavigation(viewModel: EmpowerViewModel) {
         composable("login") {
             LoginScreen(
                 viewModel = viewModel,
-                context = context,
+                context = LocalContext.current,
+                navController = navController,
                 onLoginSuccess = { navController.navigate("home") { popUpTo("login") { inclusive = true } } }
+            )
+        }
+        composable("registration") {
+            RegistrationScreen(
+                viewModel = viewModel,
+                context = LocalContext.current,
+                navController = navController
             )
         }
         composable("workerDetails") {

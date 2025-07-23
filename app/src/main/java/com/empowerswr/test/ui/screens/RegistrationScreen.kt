@@ -16,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -29,8 +30,6 @@ import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-// Registration Screen
-// Handles user registration with passport, surname, and PIN input, displays Worker ID dialog
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RegistrationScreen(
@@ -50,7 +49,7 @@ fun RegistrationScreen(
     var showWorkerIdDialog by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val keyboardController = LocalSoftwareKeyboardController.current
-    val context = LocalContext.current
+    val localContext = LocalContext.current
 
     val token by viewModel.token
     val loginError by viewModel.loginError
@@ -66,7 +65,10 @@ fun RegistrationScreen(
     // Show Worker ID dialog after registration
     if (showWorkerIdDialog) {
         AlertDialog(
-            onDismissRequest = {}, // Non-dismissible without OK
+            onDismissRequest = {
+                Log.d("EmpowerSWR", "Worker ID dialog dismiss attempted")
+                // Prevent dismissal without OK
+            },
             title = {
                 Text(
                     "Registration Successful",
@@ -82,7 +84,7 @@ fun RegistrationScreen(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        PrefsHelper.getWorkerId(context) ?: "Unknown",
+                        PrefsHelper.getWorkerId(localContext) ?: "Unknown",
                         style = MaterialTheme.typography.headlineLarge.copy(
                             fontSize = 36.sp,
                             fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
@@ -100,8 +102,9 @@ fun RegistrationScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
+                    Log.d("EmpowerSWR", "Worker ID dialog OK pressed")
                     showWorkerIdDialog = false
-                    viewModel.setToken(null) // Clear token to force login
+                    viewModel.setToken(null)
                     navController.navigate("login") {
                         popUpTo("registration") { inclusive = true }
                     }
@@ -109,40 +112,61 @@ fun RegistrationScreen(
                     Text("OK")
                 }
             },
-            dismissButton = null // No dismiss button
+            dismissButton = null
         )
     }
 
     LaunchedEffect(token) {
-        if (token != null) {
+        if (token != null && !showWorkerIdDialog) {
+            Log.d("EmpowerSWR", "LaunchedEffect triggered for token: token=$token")
+// Clear existing token to prevent navigation conflicts
+            val existingToken = PrefsHelper.getToken(localContext)
+            if (existingToken != null && existingToken != token) {
+                Log.d("EmpowerSWR", "Clearing existing token: $existingToken")
+                PrefsHelper.clearToken(localContext)
+            }
+            Log.d("EmpowerSWR", "Attempting to fetch FCM token after registration")
             FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
                 if (task.isSuccessful) {
                     val newFcmToken = task.result
                     fcmToken = newFcmToken
-                    val workerId = PrefsHelper.getWorkerId(context) ?: return@addOnCompleteListener
-                    viewModel.updateFcmToken(newFcmToken, workerId)
+                    val workerId = PrefsHelper.getWorkerId(localContext)
+                    if (workerId != null) {
+                        Log.d("EmpowerSWR", "FCM token retrieved: $newFcmToken, workerId=$workerId")
+                        try {
+                            viewModel.updateFcmToken(newFcmToken, workerId)
+                            Log.d("EmpowerSWR", "updateFcmToken called for workerId=$workerId, fcmToken=$newFcmToken")
+                        } catch (e: Exception) {
+                            fcmError = "Failed to update FCM token: ${e.message}"
+                            Log.e("EmpowerSWR", "updateFcmToken error: ${e.message}", e)
+                        }
+                    } else {
+                        fcmError = "Worker ID not found for FCM token update"
+                        Log.e("EmpowerSWR", "Worker ID not found for FCM token update")
+                    }
                 } else {
                     fcmError = "Failed to get FCM token: ${task.exception?.message}"
+                    Log.e("EmpowerSWR", "FCM token fetch error: ${task.exception?.message}")
                 }
             }
             viewModel.fetchWorkerDetails()
             viewModel.fetchAlerts()
-            PrefsHelper.setRegistered(context, true)
+            PrefsHelper.setRegistered(localContext, true)
             showWorkerIdDialog = true
         }
     }
 
     LaunchedEffect(Unit) {
-        Log.d("EmpowerSWR", "LaunchedEffect for FCM token retrieval started")
+        Log.d("EmpowerSWR", "LaunchedEffect for initial FCM token retrieval started")
         delay(5000)
         FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
             if (task.isSuccessful) {
                 fcmToken = task.result
-                Log.d("EmpowerSWR", "FCM Token: $fcmToken")
-                PrefsHelper.saveFcmToken(context, fcmToken!!)
+                Log.d("EmpowerSWR", "Initial FCM Token retrieved: $fcmToken")
+                PrefsHelper.saveFcmToken(localContext, fcmToken!!)
             } else {
-                fcmError = "Failed to get FCM token: ${task.exception?.message}"
-                Log.e("EmpowerSWR", "FCM Token Error: ${task.exception?.message}")
+                fcmError = "Failed to get initial FCM token: ${task.exception?.message}"
+                Log.e("EmpowerSWR", "Initial FCM Token error: ${task.exception?.message}")
             }
         }
     }
@@ -205,12 +229,22 @@ fun RegistrationScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Text("Register with your Passport and Surname")
+            Text(
+                text = "Register with your Passport and Surname",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Enter your passport number (e.g., RV0127280) and surname as registered",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onBackground
+            )
             Spacer(modifier = Modifier.height(16.dp))
             OutlinedTextField(
                 value = passport,
-                onValueChange = { newValue -> passport = newValue },
-                label = { Text("Passport Number") },
+                onValueChange = { newValue -> passport = newValue.trim().uppercase() },
+                label = { Text("Passport Number (e.g., RV0127280)") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(
@@ -221,7 +255,7 @@ fun RegistrationScreen(
             Spacer(modifier = Modifier.height(8.dp))
             OutlinedTextField(
                 value = surname,
-                onValueChange = { newValue -> surname = newValue },
+                onValueChange = { newValue -> surname = newValue.trim().uppercase() },
                 label = { Text("Surname") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
@@ -230,6 +264,19 @@ fun RegistrationScreen(
                     imeAction = ImeAction.Next
                 )
             )
+            loginError?.let { error ->
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = error,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    ),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
             Spacer(modifier = Modifier.height(8.dp))
             OutlinedTextField(
                 value = pin,
@@ -268,13 +315,35 @@ fun RegistrationScreen(
                 )
             )
             pinError?.let { error ->
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    error,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    ),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            fcmError?.let { error ->
                 Spacer(modifier = Modifier.height(8.dp))
-                Text(error, color = MaterialTheme.colorScheme.error)
+                Text(
+                    "FCM Error: $error",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    ),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
             Spacer(modifier = Modifier.height(16.dp))
             Button(
                 onClick = {
-                    Log.d("EmpowerSWR", "Register button clicked")
+                    Log.d("EmpowerSWR", "Register button clicked: passport=$passport, surname=$surname, pin=$pin")
                     keyboardController?.hide()
                     if (pinError == null && pin.isNotEmpty()) {
                         coroutineScope.launch {
@@ -287,14 +356,6 @@ fun RegistrationScreen(
                 enabled = pinError == null && pin.isNotEmpty()
             ) {
                 Text("Register")
-            }
-            loginError?.let { error ->
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(error, color = MaterialTheme.colorScheme.error)
-            }
-            fcmError?.let { error ->
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("FCM Error: $error", color = MaterialTheme.colorScheme.error)
             }
             Spacer(modifier = Modifier.height(16.dp))
             Text(
@@ -312,7 +373,7 @@ fun RegistrationScreen(
                     val intent = Intent(Intent.ACTION_DIAL).apply {
                         data = android.net.Uri.parse("tel:5551234")
                     }
-                    context.startActivity(intent)
+                    localContext.startActivity(intent)
                 }
             )
         }
@@ -320,7 +381,6 @@ fun RegistrationScreen(
 }
 
 // PIN Validation
-// Validates PIN input for registration
 private fun validatePin(pin: String, confirmPin: String): String? {
     return when {
         pin.length != 4 -> "PIN must be 4 digits"

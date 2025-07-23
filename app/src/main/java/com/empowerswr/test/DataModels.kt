@@ -63,3 +63,8 @@ data class LocationRequest(
 )
 data class LocationResponse(val success: Boolean, val message: String?)
 data class CheckInResponse(val success: Boolean, val message: String? = null)
+data class RegistrationResponse(
+    val token: String,
+    val workerId: String,
+    val expiry: Long
+)

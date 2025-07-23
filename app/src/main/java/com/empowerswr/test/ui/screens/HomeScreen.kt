@@ -350,23 +350,13 @@ fun HomeScreen(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 item {
-                    Button(
-                        onClick = {
-                            Log.d("EmpowerSWR", "Manual permission check button pressed")
-                            coroutineScope.launch {
-                                checkAndRequestLocationPermission()
-                            }
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp),
-                        enabled = ContextCompat.checkSelfPermission(
-                            context,
-                            Manifest.permission.ACCESS_FINE_LOCATION
-                        ) != PackageManager.PERMISSION_GRANTED
-                    ) {
-                        Text("Check Location Permission")
-                    }
+                    Text(
+                        text = "Home Screen - Welcome!",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
 
                     workerDetails?.let { worker ->
                         Card(
@@ -404,13 +394,7 @@ fun HomeScreen(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    Text(
-                        text = "Home Screen - Welcome!",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
+
 
                     Button(
                         onClick = {

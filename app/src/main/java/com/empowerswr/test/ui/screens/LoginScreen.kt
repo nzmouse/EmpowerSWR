@@ -9,6 +9,7 @@ import android.os.Build
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -23,6 +24,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.navigation.NavHostController
 import com.empowerswr.test.EmpowerViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -33,6 +35,7 @@ import kotlinx.coroutines.launch
 fun LoginScreen(
     viewModel: EmpowerViewModel,
     context: Context,
+    navController: NavHostController, // Added NavHostController parameter
     onLoginSuccess: () -> Unit
 ) {
     Log.d("EmpowerSWR", "LoginScreen composable called, Android version: ${Build.VERSION.SDK_INT}, Release: ${Build.VERSION.RELEASE}")
@@ -255,6 +258,16 @@ fun LoginScreen(
                     style = MaterialTheme.typography.bodyMedium
                 )
             }
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "Don't have an account? Register here",
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clickable {
+                        Log.d("EmpowerSWR", "Register link clicked")
+                        navController.navigate("registration")
+                    }
+            )
             Spacer(modifier = Modifier.height(16.dp))
             Button(
                 onClick = {

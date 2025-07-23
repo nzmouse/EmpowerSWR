@@ -271,6 +271,7 @@ fun AppNavigation(
                 LoginScreen(
                     viewModel = viewModel,
                     context = context,
+                    navController = navController,
                     onLoginSuccess = {
                         Log.d("EmpowerSWR", "onLoginSuccess triggered, navigating to home")
                         navController.navigate("home") {

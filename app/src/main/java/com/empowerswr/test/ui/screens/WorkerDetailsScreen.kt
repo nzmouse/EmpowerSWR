@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -153,19 +154,15 @@ fun WorkerDetailsScreen(
                 .padding(horizontal = 16.dp)
                 .verticalScroll(scrollState)
                 .imePadding(),
-            horizontalAlignment = Alignment.Start
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Button(
-                onClick = {
-                    Log.d("EmpowerSWR", "Navigating to HomeScreen")
-                    navController.navigate("home") { popUpTo("workerDetails") { inclusive = true } }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp)
-            ) {
-                Text("Go to Home")
-            }
+            Text(
+                    text = "Profael blong yu",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
+                )
+            Spacer(modifier = Modifier.height(8.dp))
 
             workerDetails?.let { worker ->
                 Card(
