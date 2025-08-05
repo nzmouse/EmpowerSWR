@@ -93,4 +93,8 @@ object PrefsHelper {
         Log.d("EmpowerSWR", "Retrieved JWT Token: $token")
         return token
     }
+
+    fun clearPrefs(context: Context) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().clear().apply()
+    }
 }

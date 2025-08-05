@@ -1,5 +1,6 @@
 package com.empowerswr.test
 
+
 import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.GET
@@ -40,4 +41,46 @@ interface EmpowerApi {
         @Query("token") token: String,
         @Body request: LocationRequest
     ): LocationResponse
+
+    @POST("user_updates.php/submit_update")  // Adjust path to match your api.php action
+    suspend fun submitPendingUpdate(
+        @Query("token") token: String,
+        @Body pendingData: Map<String, String>  // Flexible: field_key to new_value (string or map for complex like addresses)
+    ): WorkerResponse  // Returns refreshed worker with pendingFields added
+
+    @GET("flights.php/flights")
+    suspend fun getFlightDetails(
+        @Query("workerId") workerId: String,
+        @Query("token") token: String
+    ): FlightDetails
+
+    @GET("flights.php/pdb")
+    suspend fun getPdbDetails(
+        @Query("workerId") workerId: String,
+        @Query("token") token: String
+    ): PdbDetails
+
+    @POST("flights.php/update_pdb_status")
+    suspend fun updatePdbStatus(
+        @Query("workerId") workerId: String,
+        @Query("token") token: String
+    ): PdbUpdateResponse
+
+    @POST("flights.php/update_flight_status")
+    suspend fun updateFlightStatus(
+        @Query("workerId") workerId: String,
+        @Query("token") token: String
+    ): PdbUpdateResponse
+
+    @POST("flights.php/update_pdb_internal_status")
+    suspend fun updatePdbInternalStatus(
+        @Query("workerId") workerId: String,
+        @Query("token") token: String
+    ): PdbUpdateResponse
+
+    @GET("information.php/directory")
+    suspend fun getDirectory(
+        @Query("token") token: String,
+        @Query("workerId") workerId: String
+    ): List<DirectoryEntry>
 }

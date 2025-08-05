@@ -9,8 +9,11 @@ import androidx.lifecycle.viewModelScope
 import com.google.gson.Gson
 import com.google.gson.JsonParseException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import retrofit2.HttpException
 import retrofit2.Response
@@ -65,6 +68,21 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
 
     private val gson = Gson()
 
+    private val _pendingFields = mutableStateOf<Set<String>>(emptySet())
+    val pendingFields: State<Set<String>> = _pendingFields  // Expose for UI
+
+    private val _flightDetails = mutableStateOf<FlightDetails?>(null)
+    val flightDetails: State<FlightDetails?> = _flightDetails
+
+    private val _pdbDetails = mutableStateOf<PdbDetails?>(null)
+    val pdbDetails: State<PdbDetails?> = _pdbDetails
+
+    private val _internalPdbDetails = mutableStateOf<PdbDetails?>(null)
+    val internalPbDetails: State<PdbDetails?> = _internalPdbDetails
+
+    private val _directoryEntries = MutableStateFlow<List<DirectoryEntry>>(emptyList())
+    val directoryEntries: StateFlow<List<DirectoryEntry>> = _directoryEntries
+
     init {
         val savedToken = PrefsHelper.getToken(getApplication())
         val savedTokenExpiry = PrefsHelper.getTokenExpiry(getApplication())
@@ -73,10 +91,9 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
             val currentTime = System.currentTimeMillis() / 1000
             if (savedTokenExpiry > currentTime && isValidJwt(savedToken)) {
                 _token.value = savedToken
+                _token.value = savedToken
                 Log.d("EmpowerSWR", "init - Restored valid token: $savedToken")
-                fetchWorkerDetails()
-                fetchHistory()
-                fetchAlerts()
+
             } else {
                 Log.d("EmpowerSWR", "init - Saved token expired or invalid, clearing")
                 PrefsHelper.clearToken(getApplication())
@@ -223,7 +240,7 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         _notifications.value = _notifications.value.toMutableList().apply { remove(notification) }
     }
 
-    fun fetchWorkerDetails(onError: ((Throwable) -> Unit)? = null) {
+    fun fetchWorkerDetails(onError: ((Throwable?) -> Unit)? = null) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val token = _token.value ?: throw IllegalStateException("No token available")
@@ -232,16 +249,18 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
                 _workerDetails.value = response
                 PrefsHelper.saveWorkerDetails(getApplication(), response.firstName, response.surname)
                 Log.d("EmpowerSWR", "fetchWorkerDetails - Success: ${response.firstName ?: "Unknown"} ${response.surname ?: "Unknown"}, notices=${response.notices}")
+                onError?.invoke(null)
             } catch (e: Exception) {
                 Log.e("EmpowerSWR", "fetchWorkerDetails error: ${e.message}", e)
-                _workerDetails.value = null
                 onError?.invoke(e)
                 if (e.message?.contains("Invalid JWT") == true) {
                     logout()
                 }
+                // Do not set _workerDetails.value = null -- keep old data
             }
         }
     }
+
 
     fun fetchHistory(onError: ((Throwable) -> Unit)? = null) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -345,6 +364,260 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         _notificationFromIntent.value = null to null
         _checkInSuccess.value = null
         _checkInError.value = null
-        PrefsHelper.clearToken(getApplication())
+        _pendingFields.value = emptySet()
+        PrefsHelper.clearPrefs(getApplication())
     }
+
+    //Edit Profile Functions
+
+    fun updatePreferredName(newName: String, callback: (Boolean, String?) -> Unit) {
+        val currentWorker = _workerDetails.value ?: return callback(false, "No worker data")
+        val currentToken = _token.value ?: return callback(false, "No token")
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val response = api.submitPendingUpdate(
+                    token = currentToken,
+                    pendingData = mapOf(
+                        "worker_id" to currentWorker.ID.toString(),
+                        "field_key" to "prefName",
+                        "new_value" to newName
+                    )
+                )
+                withContext(Dispatchers.Main) {
+                    _workerDetails.value = response
+                    _pendingFields.value = response.pendingFields?.toSet() ?: emptySet()  // Sync from response, not manual +
+                }
+                callback(true, null)
+                Log.d("EmpowerSWR", "Submitted prefName change for review")
+            } catch (e: Exception) {
+                callback(false, e.message)
+                Log.e("EmpowerSWR", "Submit prefName error: ${e.message}", e)
+            }
+        }
+    }
+
+    fun updateContactInfo(primary: String, secondary: String, aunz: String, email: String, callback: (Boolean, String?) -> Unit) {
+        val currentWorker = _workerDetails.value ?: return callback(false, "No worker data")
+        val currentToken = _token.value ?: return callback(false, "No token")
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val response = api.submitPendingUpdate(
+                    token = currentToken,
+                    pendingData = mapOf(
+                        "worker_id" to currentWorker.ID.toString(),
+                        "field_key" to "contacts",
+                        "new_value" to "{\"phone\":\"$primary\",\"phone2\":\"$secondary\",\"aunzPhone\":\"$aunz\",\"email\":\"$email\"}"
+                    )
+                )
+                withContext(Dispatchers.Main) {
+                    _workerDetails.value = response
+                    _pendingFields.value = _pendingFields.value + "contacts"  // Safe on main
+                }
+                callback(true, null)
+                Log.d("EmpowerSWR", "Submitted contact changes for review")
+            } catch (e: Exception) {
+                callback(false, e.message)
+                Log.e("EmpowerSWR", "Submit contacts error: ${e.message}", e)
+            }
+        }
+    }
+    fun updatePassportDetails(
+        firstName: String,
+        surname: String,
+        ppno: String,
+        birthplace: String,
+        ppexpiry: String,
+        birthProvince: String,
+        callback: (Boolean, String?) -> Unit
+    ) {
+        val currentWorker = _workerDetails.value ?: return callback(false, "No worker data")
+        val currentToken = _token.value ?: return callback(false, "No token")
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val passportData = buildString {
+                    append("{\"ppno\":\"$ppno\",\"birthplace\":\"$birthplace\",\"ppexpiry\":\"$ppexpiry\",\"birthProvince\":\"$birthProvince\"")
+                    if (firstName.isNotBlank()) append(",\"firstName\":\"$firstName\"")
+                    if (surname.isNotBlank()) append(",\"surname\":\"$surname\"")
+                    append("}")
+                }
+
+                val response = api.submitPendingUpdate(
+                    token = currentToken,
+                    pendingData = mapOf(
+                        "worker_id" to currentWorker.ID.toString(),
+                        "field_key" to "passport",
+                        "new_value" to passportData
+                    )
+                )
+                withContext(Dispatchers.Main) {
+                    _workerDetails.value = response
+                    _pendingFields.value = _pendingFields.value + "passport"  // Optional if pending badge needed
+                }
+                callback(true, null)
+                Log.d("EmpowerSWR", "Updated passport details")
+            } catch (e: Exception) {
+                callback(false, e.message)
+                Log.e("EmpowerSWR", "Update passport error: ${e.message}", e)
+            }
+        }
+    }
+    fun fetchFlightDetails(workerId: String, onError: (Throwable?) -> Unit) {
+        val currentToken = _token.value
+        if (currentToken == null) {
+            onError(IllegalStateException("No token available"))
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                Log.d("EmpowerSWR", "fetchFlightDetails - Sending workerId: $workerId, token: $currentToken")
+                val response = api.getFlightDetails(workerId, currentToken)
+                withContext(Dispatchers.Main) {
+                    _flightDetails.value = response
+                }
+            } catch (e: Exception) {
+                Log.e("EmpowerSWR", "Error fetching flight details: ${e.message}")
+                withContext(Dispatchers.Main) {
+                    onError(e)
+                }
+            }
+        }
+    }
+    fun fetchPdbDetails(workerId: String, onError: (Throwable?) -> Unit) {
+        val currentToken = _token.value
+        if (currentToken == null) {
+            Log.e("EmpowerSWR", "fetchPdbDetails - No token available")
+            onError(IllegalStateException("No token available"))
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                Log.d("EmpowerSWR", "fetchPdbDetails - Sending workerId: $workerId, token: $currentToken")
+                val response = api.getPdbDetails(workerId, currentToken)
+                withContext(Dispatchers.Main) {
+                    _pdbDetails.value = response
+                }
+            } catch (e: Exception) {
+                Log.e("EmpowerSWR", "Error fetching PDB details: ${e.message}")
+                withContext(Dispatchers.Main) {
+                    onError(e)
+                }
+            }
+        }
+    }
+    fun updatePdbStatus(workerId: String, onResult: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val currentToken = _token.value
+                if (currentToken == null) {
+                    Log.e("EmpowerSWR", "updatePdbStatus - No token available")
+                    onResult(false, "No token available")
+                    return@launch
+                }
+                Log.d("EmpowerSWR", "updatePdbStatus - Sending workerId: $workerId, token: $currentToken")
+                val response = api.updatePdbStatus(workerId, currentToken)
+                withContext(Dispatchers.Main) {
+                    if (response.success) {
+                        // Refresh PDB details to reflect updated status
+                        fetchPdbDetails(workerId) { error ->
+                            if (error != null) {
+                                onResult(false, "Failed to refresh PDB details: ${error.message}")
+                            } else {
+                                _pdbDetails.value = _pdbDetails.value?.copy(pdbStatus = "App OK")
+                                onResult(true, response.message)
+                            }
+                        }
+                    } else {
+                        onResult(false, response.message ?: "Failed to update PDB status")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("EmpowerSWR", "Update PDB status error: ${e.message}")
+                withContext(Dispatchers.Main) {
+                    onResult(false, e.message)
+                }
+            }
+        }
+    }
+
+    fun updatePdbInternalStatus(workerId: String, onResult: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val currentToken = _token.value
+                if (currentToken == null) {
+                    Log.e("EmpowerSWR", "updatePdbInternalStatus - No token available")
+                    onResult(false, "No token available")
+                    return@launch
+                }
+                Log.d("EmpowerSWR", "updatePdbInternalStatus - Sending workerId: $workerId, token: $currentToken")
+                val response = api.updatePdbInternalStatus(workerId, currentToken)
+                withContext(Dispatchers.Main) {
+                    if (response.success) {
+                        // Refresh PDB details to reflect updated status
+                        fetchPdbDetails(workerId) { error ->
+                            if (error != null) {
+                                onResult(false, "Failed to refresh PDB details: ${error.message}")
+                            } else {
+                                _pdbDetails.value = _pdbDetails.value?.copy(internalPdbStatus = "App OK")
+                                onResult(true, response.message)
+                            }
+                        }
+                    } else {
+                        onResult(false, response.message ?: "Failed to update internal PDB status")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("EmpowerSWR", "Update internal PDB status error: ${e.message}")
+                withContext(Dispatchers.Main) {
+                    onResult(false, e.message)
+                }
+            }
+        }
+    }
+    fun updateFlightStatus(workerId: String, onResult: (Boolean, String?) -> Unit) {
+        val currentToken = _token.value
+        if (currentToken == null) {
+            Log.e("EmpowerSWR", "updateFlightStatus - No token available")
+            onResult(false, "No token available")
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val response = api.updateFlightStatus(workerId, currentToken) // Assume this endpoint exists
+                Log.d("EmpowerSWR", "Update flight status response: $response")
+                if (response.success) {
+                    fetchFlightDetails(workerId) { error ->
+                        if (error != null) {
+                            onResult(false, "Failed to refresh flight details: ${error.message}")
+                        } else {
+                            onResult(true, response.message)
+                        }
+                    }
+                } else {
+                    onResult(false, response.message)
+                }
+            } catch (e: Exception) {
+                Log.e("EmpowerSWR", "Update flight status error: ${e.message}")
+                onResult(false, e.message)
+            }
+        }
+    }
+    fun fetchDirectory(token: String, workerId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                Log.d("EmpowerSWR", "fetchDirectory - Sending token: $token, workerId: $workerId")
+                val entries = api.getDirectory(token, workerId)
+                _directoryEntries.value = entries
+            } catch (e: Exception) {
+                _directoryEntries.value = emptyList()
+                Log.e("EmpowerSWR", "Fetch directory error: ${e.message}")
+                if (e is HttpException && e.message?.contains("Invalid JWT") == true) {
+                    logout()
+                }
+            }
+        }
+    }
+
 }

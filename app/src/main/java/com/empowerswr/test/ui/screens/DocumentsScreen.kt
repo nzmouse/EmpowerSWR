@@ -10,6 +10,7 @@ import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -33,16 +34,20 @@ import java.io.File
 import android.util.Log
 import com.empowerswr.test.network.NetworkModule
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DocumentsScreen(
     uploadService: UploadService = NetworkModule.uploadService,
-    navController: NavController? = null
+    navController: NavController? = null,
+    type: String? = null,
+    expiryYY: String? = null,
+    from: String? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     var isUploading by remember { mutableStateOf(false) }
-    var selectedDocumentType by remember { mutableStateOf("") }
+    var selectedDocumentType by remember(type, from) { mutableStateOf(if (from == "passport") "Passport" else (type ?: "")) }
     val documentTypes = listOf(
         "Passport" to "PPT",
         "DFAT Privacy/Consent" to "PRI",
@@ -56,9 +61,13 @@ fun DocumentsScreen(
         "Chief/Pastor Letter" to "REF"
     )
 
-    var expanded by remember { mutableStateOf(false) }
+    var expanded by remember { mutableStateOf(from == "passport") }
 
-    Log.d("EmpowerSWR", "DocumentsScreen composable rendered")
+    Log.d("EmpowerSWR", "DocumentsScreen composable rendered with type=$type, expiryYY=$expiryYY, from=$from, selectedDocumentType=$selectedDocumentType")
+    Log.d("EmpowerSWR", "NavController hash: ${navController.hashCode()}")
+    navController?.currentBackStack?.value?.let { backStack ->
+        Log.d("EmpowerSWR", "DocumentsScreen back stack: ${backStack.map { it.destination.route }}")
+    }
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         Log.d("EmpowerSWR", "File picker result: uri=$uri")
@@ -67,8 +76,11 @@ fun DocumentsScreen(
             scope.launch {
                 try {
                     Log.d("EmpowerSWR", "Starting file picker upload: $uri")
-                    uploadFile(context, uri, selectedDocumentType, documentTypes, uploadService, isScanned = false)
+                    uploadFile(context, uri, selectedDocumentType, documentTypes, uploadService, isScanned = false, expiryYY = if (from == "passport") expiryYY else null)
                     snackbarHostState.showSnackbar("Upload successful")
+                    if (from == "passport") {
+                        navController?.popBackStack()
+                    }
                 } catch (e: HttpException) {
                     Log.e("EmpowerSWR", "Upload failed: HTTP ${e.code()} ${e.message()}", e)
                     val errorBody = e.response()?.errorBody()?.string()
@@ -81,7 +93,10 @@ fun DocumentsScreen(
                 }
             }
         } else {
-            Log.w("EmpowerSWR", "File picker: Invalid uri=$uri or documentType=$selectedDocumentType")
+            scope.launch {
+                Log.w("EmpowerSWR", "File picker: Invalid uri=$uri or documentType=$selectedDocumentType")
+                snackbarHostState.showSnackbar("Please select a document type and file")
+            }
         }
     }
 
@@ -105,8 +120,11 @@ fun DocumentsScreen(
                         Log.d("EmpowerSWR", "Scanner PDF URI: $pdfUri")
                         if (pdfUri != null) {
                             Log.d("EmpowerSWR", "Starting scanner upload: $pdfUri")
-                            uploadFile(context, pdfUri, selectedDocumentType, documentTypes, uploadService, isScanned = true)
+                            uploadFile(context, pdfUri, selectedDocumentType, documentTypes, uploadService, isScanned = true, expiryYY = if (from == "passport") expiryYY else null)
                             snackbarHostState.showSnackbar("Scan and upload successful")
+                            if (from == "passport") {
+                                navController?.popBackStack()
+                            }
                         } else {
                             snackbarHostState.showSnackbar("Failed to scan document")
                             Log.e("EmpowerSWR", "Scanner failed: No PDF URI")
@@ -123,6 +141,7 @@ fun DocumentsScreen(
                     }
                 } else {
                     Log.w("EmpowerSWR", "Scanner result is null or documentType=$selectedDocumentType")
+                    snackbarHostState.showSnackbar("Please select a document type")
                 }
             } else if (activityResult.resultCode == Activity.RESULT_CANCELED) {
                 snackbarHostState.showSnackbar("Scan cancelled")
@@ -135,6 +154,18 @@ fun DocumentsScreen(
     }
 
     Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Upload Document") },
+                navigationIcon = {
+                    IconButton(onClick = {
+                        navController?.popBackStack()
+                    }) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                }
+            )
+        },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
         Column(
@@ -163,41 +194,43 @@ fun DocumentsScreen(
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Box {
-                        OutlinedTextField(
-                            value = selectedDocumentType,
-                            onValueChange = { },
-                            label = { Text("Select Document Type") },
-                            modifier = Modifier.fillMaxWidth(),
-                            readOnly = true,
-                            trailingIcon = {
-                                IconButton(onClick = {
-                                    Log.d("EmpowerSWR", "Dropdown clicked")
-                                    expanded = true
-                                }) {
-                                    Icon(
-                                        imageVector = Icons.Default.ArrowDropDown,
-                                        contentDescription = "Dropdown"
+                    key(selectedDocumentType) {
+                        Box {
+                            OutlinedTextField(
+                                value = selectedDocumentType,
+                                onValueChange = { },
+                                label = { Text("Select Document Type") },
+                                modifier = Modifier.fillMaxWidth(),
+                                readOnly = true,
+                                trailingIcon = {
+                                    IconButton(onClick = {
+                                        Log.d("EmpowerSWR", "Dropdown clicked")
+                                        expanded = true
+                                    }) {
+                                        Icon(
+                                            imageVector = Icons.Default.ArrowDropDown,
+                                            contentDescription = "Dropdown"
+                                        )
+                                    }
+                                }
+                            )
+                            DropdownMenu(
+                                expanded = expanded,
+                                onDismissRequest = {
+                                    Log.d("EmpowerSWR", "Dropdown dismissed")
+                                    expanded = false
+                                }
+                            ) {
+                                documentTypes.forEach { (type, _) ->
+                                    DropdownMenuItem(
+                                        text = { Text(type) },
+                                        onClick = {
+                                            Log.d("EmpowerSWR", "Selected document type: $type")
+                                            selectedDocumentType = type
+                                            expanded = false
+                                        }
                                     )
                                 }
-                            }
-                        )
-                        DropdownMenu(
-                            expanded = expanded,
-                            onDismissRequest = {
-                                Log.d("EmpowerSWR", "Dropdown dismissed")
-                                expanded = false
-                            }
-                        ) {
-                            documentTypes.forEach { (type, _) ->
-                                DropdownMenuItem(
-                                    text = { Text(type) },
-                                    onClick = {
-                                        Log.d("EmpowerSWR", "Selected document type: $type")
-                                        selectedDocumentType = type
-                                        expanded = false
-                                    }
-                                )
                             }
                         }
                     }
@@ -209,13 +242,19 @@ fun DocumentsScreen(
                             onClick = {
                                 Log.d("EmpowerSWR", "Scan Document button clicked")
                                 if (selectedDocumentType.isEmpty()) {
-                                    Toast.makeText(context, "Select a document type", Toast.LENGTH_SHORT).show()
-                                    Log.w("EmpowerSWR", "Scan failed: No document type selected")
+                                    scope.launch {
+                                        Toast.makeText(context, "Select a document type", Toast.LENGTH_SHORT).show()
+                                        Log.w("EmpowerSWR", "Scan failed: No document type selected")
+                                        snackbarHostState.showSnackbar("Please select a document type")
+                                    }
                                 } else {
                                     val token = PrefsHelper.getJwtToken(context)
                                     if (token.isEmpty()) {
-                                        Toast.makeText(context, "Please log in to scan documents", Toast.LENGTH_SHORT).show()
-                                        Log.w("EmpowerSWR", "Scan failed: No valid JWT")
+                                        scope.launch {
+                                            Toast.makeText(context, "Please log in to scan documents", Toast.LENGTH_SHORT).show()
+                                            Log.w("EmpowerSWR", "Scan failed: No valid JWT")
+                                            snackbarHostState.showSnackbar("Please log in to scan documents")
+                                        }
                                     } else {
                                         val activity = context as? Activity
                                         if (activity != null) {
@@ -227,12 +266,18 @@ fun DocumentsScreen(
                                                     )
                                                 }
                                                 .addOnFailureListener { e ->
-                                                    Toast.makeText(context, "Failed to start scanner: ${e.message}", Toast.LENGTH_SHORT).show()
-                                                    Log.e("EmpowerSWR", "Scanner failed to start: ${e.message}", e)
+                                                    scope.launch {
+                                                        Toast.makeText(context, "Failed to start scanner: ${e.message}", Toast.LENGTH_SHORT).show()
+                                                        Log.e("EmpowerSWR", "Scanner failed to start: ${e.message}", e)
+                                                        snackbarHostState.showSnackbar("Failed to start scanner: ${e.message}")
+                                                    }
                                                 }
                                         } else {
-                                            Toast.makeText(context, "Activity context required", Toast.LENGTH_SHORT).show()
-                                            Log.e("EmpowerSWR", "Scan failed: No activity context")
+                                            scope.launch {
+                                                Toast.makeText(context, "Activity context required", Toast.LENGTH_SHORT).show()
+                                                Log.e("EmpowerSWR", "Scan failed: No activity context")
+                                                snackbarHostState.showSnackbar("Activity context required")
+                                            }
                                         }
                                     }
                                 }
@@ -245,13 +290,19 @@ fun DocumentsScreen(
                             onClick = {
                                 Log.d("EmpowerSWR", "Upload Document button clicked")
                                 if (selectedDocumentType.isEmpty()) {
-                                    Toast.makeText(context, "Select a document type", Toast.LENGTH_SHORT).show()
-                                    Log.w("EmpowerSWR", "Upload failed: No document type selected")
+                                    scope.launch {
+                                        Toast.makeText(context, "Select a document type", Toast.LENGTH_SHORT).show()
+                                        Log.w("EmpowerSWR", "Upload failed: No document type selected")
+                                        snackbarHostState.showSnackbar("Please select a document type")
+                                    }
                                 } else {
                                     val token = PrefsHelper.getJwtToken(context)
                                     if (token.isEmpty()) {
-                                        Toast.makeText(context, "Please log in to upload documents", Toast.LENGTH_SHORT).show()
-                                        Log.w("EmpowerSWR", "Upload failed: No valid JWT")
+                                        scope.launch {
+                                            Toast.makeText(context, "Please log in to upload documents", Toast.LENGTH_SHORT).show()
+                                            Log.w("EmpowerSWR", "Upload failed: No valid JWT")
+                                            snackbarHostState.showSnackbar("Please log in to upload documents")
+                                        }
                                     } else {
                                         Log.d("EmpowerSWR", "Launching file picker")
                                         filePicker.launch("application/pdf,image/jpeg,image/png")
@@ -266,35 +317,39 @@ fun DocumentsScreen(
                 }
             }
 
-            // Ol Dokumen Blong Mi Button
-            Button(
-                onClick = {
-                    Log.d("EmpowerSWR", "Ol Dokumen Blong Mi button clicked")
-                    try {
-                        if (navController == null) {
-                            Log.e("EmpowerSWR", "Navigation failed: navController is null")
-                            Toast.makeText(context, "Navigation not available", Toast.LENGTH_SHORT).show()
-                        } else {
-                            Log.d("EmpowerSWR", "Navigating to document-list")
-                            navController.navigate("document-list")
+            // Ol Dokumen Blong Mi Button (hide if from == "passport")
+            if (from != "passport") {
+                Button(
+                    onClick = {
+                        Log.d("EmpowerSWR", "Ol Dokumen Blong Mi button clicked")
+                        scope.launch {
+                            try {
+                                if (navController == null) {
+                                    Log.e("EmpowerSWR", "Navigation failed: navController is null")
+                                    snackbarHostState.showSnackbar("Navigation not available")
+                                } else {
+                                    Log.d("EmpowerSWR", "Navigating to document-list")
+                                    navController.navigate("document-list")
+                                }
+                            } catch (e: IllegalArgumentException) {
+                                Log.e("EmpowerSWR", "Navigation failed: Invalid destination document-list", e)
+                                snackbarHostState.showSnackbar("Error: Invalid navigation destination")
+                            } catch (e: Exception) {
+                                Log.e("EmpowerSWR", "Navigation failed: ${e.message}", e)
+                                snackbarHostState.showSnackbar("Navigation error: ${e.message}")
+                            }
                         }
-                    } catch (e: IllegalArgumentException) {
-                        Log.e("EmpowerSWR", "Navigation failed: Invalid destination document-list", e)
-                        Toast.makeText(context, "Error: Invalid navigation destination", Toast.LENGTH_SHORT).show()
-                    } catch (e: Exception) {
-                        Log.e("EmpowerSWR", "Navigation failed: ${e.message}", e)
-                        Toast.makeText(context, "Navigation error: ${e.message}", Toast.LENGTH_SHORT).show()
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.secondary
-                )
-            ) {
-                Text(
-                    text = "Ol Dokumen Blong Mi",
-                    style = MaterialTheme.typography.labelLarge
-                )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.secondary
+                    )
+                ) {
+                    Text(
+                        text = "Ol Dokumen Blong Mi",
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                }
             }
 
             if (isUploading) {
@@ -310,16 +365,20 @@ private suspend fun uploadFile(
     docType: String,
     docTypes: List<Pair<String, String>>,
     uploadService: UploadService,
-    isScanned: Boolean
+    isScanned: Boolean,
+    expiryYY: String? = null
 ) {
-    Log.d("EmpowerSWR", "Starting upload for docType: $docType, uri: $uri, isScanned: $isScanned")
+    Log.d("EmpowerSWR", "Starting upload for docType: $docType, uri: $uri, isScanned: $isScanned, expiryYY: $expiryYY")
     val contentResolver = context.contentResolver
     val (givenName, surname) = PrefsHelper.getWorkerDetails(context)
     val capitalizedGivenName = givenName.split(" ").joinToString(" ") { it.lowercase().replaceFirstChar { it.uppercaseChar() } }
     val capitalizedSurname = surname.split(" ").joinToString(" ") { it.lowercase().replaceFirstChar { it.uppercaseChar() } }
-    val code = docTypes.find { it.first == docType }?.second ?: run {
+    var code = docTypes.find { it.first == docType }?.second ?: run {
         Log.e("EmpowerSWR", "Invalid docType: $docType")
         return
+    }
+    if (docType == "Passport" && expiryYY != null) {
+        code += expiryYY
     }
     val extension = if (isScanned) {
         "pdf"

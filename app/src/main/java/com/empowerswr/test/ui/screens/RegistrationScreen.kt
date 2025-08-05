@@ -23,6 +23,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.navigation.NavHostController
 import com.empowerswr.test.EmpowerViewModel
 import com.empowerswr.test.PrefsHelper
@@ -46,7 +48,9 @@ fun RegistrationScreen(
     var confirmPin by rememberSaveable { mutableStateOf("") }
     var fcmToken by remember { mutableStateOf<String?>(null) }
     var fcmError by remember { mutableStateOf<String?>(null) }
-    var showWorkerIdDialog by remember { mutableStateOf(false) }
+    var showWorkerIdDialog by rememberSaveable { mutableStateOf(false) }
+    var registrationComplete by rememberSaveable { mutableStateOf(false) }
+    var dialogDismissed by rememberSaveable { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val localContext = LocalContext.current
@@ -64,62 +68,83 @@ fun RegistrationScreen(
 
     // Show Worker ID dialog after registration
     if (showWorkerIdDialog) {
-        AlertDialog(
+        Log.d("EmpowerSWR", "Rendering Worker ID dialog")
+        Dialog(
             onDismissRequest = {
                 Log.d("EmpowerSWR", "Worker ID dialog dismiss attempted")
                 // Prevent dismissal without OK
             },
-            title = {
-                Text(
-                    "Registration Successful",
-                    style = MaterialTheme.typography.headlineMedium,
-                    textAlign = TextAlign.Center
-                )
-            },
-            text = {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            properties = DialogProperties(
+                dismissOnBackPress = false,
+                dismissOnClickOutside = false
+            )
+        ) {
+            Surface(
+                shape = MaterialTheme.shapes.medium,
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 8.dp,
+                modifier = Modifier.padding(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .padding(24.dp)
+                        .fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
                     Text(
-                        "Your Worker ID is:",
-                        style = MaterialTheme.typography.bodyLarge
+                        text = "Registration Successful",
+                        style = MaterialTheme.typography.headlineMedium,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        PrefsHelper.getWorkerId(localContext) ?: "Unknown",
+                        text = "Your Worker ID is:",
+                        style = MaterialTheme.typography.bodyLarge,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = PrefsHelper.getWorkerId(localContext) ?: "Unknown",
                         style = MaterialTheme.typography.headlineLarge.copy(
                             fontSize = 36.sp,
-                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                            fontWeight = FontWeight.Bold
                         ),
                         color = MaterialTheme.colorScheme.primary,
                         textAlign = TextAlign.Center
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        "Please write this down and use it to log in with your PIN.",
+                        text = "Please write this down and use it to log in with your PIN.",
                         style = MaterialTheme.typography.bodyMedium,
                         textAlign = TextAlign.Center
                     )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    Log.d("EmpowerSWR", "Worker ID dialog OK pressed")
-                    showWorkerIdDialog = false
-                    viewModel.setToken(null)
-                    navController.navigate("login") {
-                        popUpTo("registration") { inclusive = true }
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(
+                        onClick = {
+                            Log.d("EmpowerSWR", "Worker ID dialog OK pressed")
+                            showWorkerIdDialog = false
+                            dialogDismissed = true
+                            navController.navigate("login") {
+                                popUpTo("registration") { inclusive = true }
+                            }
+                            Log.d("EmpowerSWR", "Navigating to login after dialog dismissal")
+                        },
+                        modifier = Modifier.fillMaxWidth(0.5f)
+                    ) {
+                        Text("OK")
                     }
-                }) {
-                    Text("OK")
                 }
-            },
-            dismissButton = null
-        )
+            }
+        }
     }
 
+    // Handle registration completion
     LaunchedEffect(token) {
-        if (token != null && !showWorkerIdDialog) {
+        if (token != null && !registrationComplete && !showWorkerIdDialog) {
             Log.d("EmpowerSWR", "LaunchedEffect triggered for token: token=$token")
-// Clear existing token to prevent navigation conflicts
+            // Clear existing token to prevent navigation conflicts
             val existingToken = PrefsHelper.getToken(localContext)
             if (existingToken != null && existingToken != token) {
                 Log.d("EmpowerSWR", "Clearing existing token: $existingToken")
@@ -152,7 +177,19 @@ fun RegistrationScreen(
             viewModel.fetchWorkerDetails()
             viewModel.fetchAlerts()
             PrefsHelper.setRegistered(localContext, true)
+            registrationComplete = true
             showWorkerIdDialog = true
+            Log.d("EmpowerSWR", "Registration complete, showing Worker ID dialog")
+        }
+    }
+
+    // Prevent premature navigation
+    LaunchedEffect(dialogDismissed) {
+        if (dialogDismissed) {
+            Log.d("EmpowerSWR", "Dialog dismissed, allowing navigation")
+            // Navigation is handled in the dialog's OK button
+        } else if (token != null && registrationComplete && !showWorkerIdDialog) {
+            Log.d("EmpowerSWR", "Preventing navigation until dialog is dismissed")
         }
     }
 
@@ -307,7 +344,7 @@ fun RegistrationScreen(
                         keyboardController?.hide()
                         if (pinError == null && pin.isNotEmpty()) {
                             coroutineScope.launch {
-                                Log.d("EmpowerSWR", "Keyboard Done: Attempting registration with passport: $passport, surname: $surname, pin: $pin")
+                                Log.d("EmpowerSWR", "Keyboard Done: Attempting registration with passport: $passport, surname: $surname, pin=$pin")
                                 viewModel.register(passport, surname, pin)
                             }
                         }

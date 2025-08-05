@@ -8,52 +8,44 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material.icons.outlined.LocationOn
-import androidx.compose.material.icons.outlined.Menu
-import androidx.compose.material.icons.outlined.Person
-import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.ThumbUp
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
-import androidx.navigation.NavHostController
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import com.empowerswr.test.ui.screens.RegistrationScreen
-import com.empowerswr.test.ui.screens.LoginScreen
-import com.empowerswr.test.ui.screens.HomeScreen
-import com.empowerswr.test.ui.screens.WorkerDetailsScreen
-import com.empowerswr.test.ui.screens.WorkLocationScreen
-import com.empowerswr.test.ui.screens.ContractsScreen
-import com.empowerswr.test.ui.screens.DocumentsScreen
-import com.empowerswr.test.ui.screens.UpdateDetailsScreen
-import com.empowerswr.test.ui.screens.InformationScreen
-import com.empowerswr.test.ui.screens.SettingsScreen
+import androidx.navigation.navArgument
+import com.empowerswr.test.network.NetworkModule
+import com.empowerswr.test.ui.screens.*
 import com.empowerswr.test.ui.theme.EmpowerSWRTheme
 import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import com.empowerswr.test.network.NetworkModule
-import com.empowerswr.test.network.NetworkModule.uploadService
-import com.empowerswr.test.ui.screens.DocumentListScreen
-import com.empowerswr.test.ui.screens.DocumentSignerScreen
-import com.empowerswr.test.ui.screens.DocumentViewerScreen
+
+data class NavItem(
+    val title: String,
+    val icon: ImageVector,
+    val route: String
+)
+
+val navItems = listOf(
+    NavItem("Home", Icons.Outlined.Home, "home"),
+    NavItem("Profile", Icons.Outlined.Person, "profile"),
+    NavItem("Flights", Icons.Outlined.AirplanemodeActive, "flight_pdb_details"),
+    NavItem("Files", Icons.Outlined.Menu, "documents"),
+    NavItem("Info", Icons.Outlined.Info, "information")
+)
 
 class MainActivity : ComponentActivity() {
     private val viewModel: EmpowerViewModel by viewModels {
@@ -113,12 +105,8 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            Log.d("EmpowerSWR", "setContent called")
             EmpowerSWRTheme {
-                AppNavigation(
-                    viewModel = viewModel,
-                    context = this@MainActivity
-                )
+                NavigationSetup(viewModel = viewModel)
             }
         }
     }
@@ -142,46 +130,34 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-data class NavItem(
-    val title: String,
-    val icon: ImageVector,
-    val route: String
-)
-
-val navItems = listOf(
-    NavItem("Home", Icons.Outlined.Home, "home"),
-    NavItem("Profile", Icons.Outlined.Person, "profile"),
-    NavItem("Work Location", Icons.Outlined.LocationOn, "work_location"),
-    NavItem("Contracts", Icons.Outlined.ThumbUp, "contracts"),
-    NavItem("Update Details", Icons.Outlined.Edit, "update_details"),
-    NavItem("Documents", Icons.Outlined.Menu, "documents"),
-    NavItem("Information", Icons.Outlined.Info, "information"),
-    NavItem("Settings", Icons.Outlined.Settings, "settings")
-)
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AppNavigation(
-    viewModel: EmpowerViewModel,
-    context: Context
-) {
+fun NavigationSetup(viewModel: EmpowerViewModel) {
     val navController = rememberNavController()
+    val context = LocalContext.current
     val token by viewModel.token
     val workerDetails by viewModel.workerDetails
     val currentRoute by navController.currentBackStackEntryAsState()
     val currentDestination = currentRoute?.destination?.route
     var showLogoutDialog by remember { mutableStateOf(false) }
+    var initialNavigationDone by rememberSaveable { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
 
-    // Force navigation to home after login and clear back stack
-    LaunchedEffect(token) {
-        if (token != null) {
-            Log.d("EmpowerSWR", "Token set, forcing navigation to home from $currentDestination")
-            delay(500) // Increased delay for token propagation
+    // Force navigation to home only on initial token set and when on login or invalid route
+    LaunchedEffect(token, currentDestination) {
+        if (token != null && !initialNavigationDone && (currentDestination == "login" || currentDestination == null)) {
+            Log.d("EmpowerSWR", "Token set, forcing initial navigation to home from $currentDestination")
+            delay(500) // Delay for token propagation
             navController.navigate("home") {
                 popUpTo(navController.graph.startDestinationId) { inclusive = true }
                 launchSingleTop = true
             }
+            initialNavigationDone = true
+            Log.d("EmpowerSWR", "Initial navigation to home completed")
+        } else if (token != null && currentDestination == "registration") {
+            Log.d("EmpowerSWR", "Token set during registration, skipping forced navigation to allow dialog")
+        } else if (token != null && initialNavigationDone) {
+            Log.d("EmpowerSWR", "Token set, but initial navigation already done, staying on $currentDestination")
         }
     }
 
@@ -195,6 +171,7 @@ fun AppNavigation(
                     PrefsHelper.clearToken(context)
                     viewModel.logout()
                     showLogoutDialog = false
+                    initialNavigationDone = false // Reset for next login
                     navController.navigate("login") {
                         popUpTo(navController.graph.startDestinationId) { inclusive = true }
                     }
@@ -215,16 +192,28 @@ fun AppNavigation(
             TopAppBar(
                 title = {
                     Text(
-                        if (token == null) "Empower SWR - Login"
-                        else "Logged in as ${workerDetails?.firstName ?: "Worker ID: ${PrefsHelper.getWorkerId(context) ?: "Unknown"}"}"
+                        text = if (token == null) "Empower SWR - Login"
+                        else workerDetails?.firstName ?: "Worker ID: ${PrefsHelper.getWorkerId(context) ?: "Unknown"}",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary
                     )
                 },
                 actions = {
                     if (token != null) {
+                        // Settings Icon
+                        IconButton(onClick = { navController.navigate("settings") }) {
+                            Icon(
+                                imageVector = Icons.Default.Settings,
+                                contentDescription = "Open Settings",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        // Logout Icon
                         IconButton(onClick = { showLogoutDialog = true }) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.ExitToApp,
-                                contentDescription = "Logout"
+                                contentDescription = "Logout",
+                                tint = MaterialTheme.colorScheme.primary
                             )
                         }
                     }
@@ -246,7 +235,7 @@ fun AppNavigation(
                                         saveState = true
                                     }
                                     launchSingleTop = true
-                                    restoreState = false // Prevent restoring profile
+                                    restoreState = false
                                 }
                             }
                         )
@@ -274,6 +263,7 @@ fun AppNavigation(
                     navController = navController,
                     onLoginSuccess = {
                         Log.d("EmpowerSWR", "onLoginSuccess triggered, navigating to home")
+                        initialNavigationDone = false
                         navController.navigate("home") {
                             popUpTo(navController.graph.startDestinationId) { inclusive = true }
                             launchSingleTop = true
@@ -300,29 +290,31 @@ fun AppNavigation(
                     context = context
                 )
             }
+            composable("information") {
+                InformationScreen(
+                    viewModel = viewModel,
+                    navController = navController,
+                    context = context
+                )
+            }
             composable("contracts") {
                 ContractsScreen(
                     viewModel = viewModel,
                     context = context
                 )
             }
-            composable("update_details") {
-                UpdateDetailsScreen(
+            composable("flight_pdb_details") {
+                FlightsScreen(
                     viewModel = viewModel,
-                    context = context
+                    context = context,
+                    navController = navController
                 )
-            }
-            composable("information") {
-                InformationScreen(
-                    viewModel = viewModel,
-                    context = context
-                )
-            }
-            composable("settings") {
-                SettingsScreen()
             }
             composable("documents") {
-                DocumentsScreen(uploadService = NetworkModule.uploadService, navController = navController)
+                DocumentsScreen(
+                    uploadService = NetworkModule.uploadService,
+                    navController = navController
+                )
             }
             composable("document-list") {
                 DocumentListScreen(
@@ -341,6 +333,59 @@ fun AppNavigation(
                     navController = navController,
                     filename = backStackEntry.arguments?.getString("filename") ?: "",
                     context = context
+                )
+            }
+            composable("edit_personal") {
+                EditPersonalScreen(
+                    viewModel = viewModel,
+                    navController = navController
+                )
+            }
+            composable("edit_contact") {
+                EditContactScreen(
+                    viewModel = viewModel,
+                    navController = navController
+                )
+            }
+            composable("edit_passport") {
+                EditPassportScreen(
+                    viewModel = viewModel,
+                    navController = navController
+                )
+            }
+            composable("settings") {
+                SettingsScreen(navController = navController)
+            }
+            composable(
+                route = "documents?type={type}&expiryYY={expiryYY}&from={from}",
+                arguments = listOf(
+                    navArgument("type") {
+                        type = NavType.StringType
+                        nullable = true
+                        defaultValue = null
+                    },
+                    navArgument("expiryYY") {
+                        type = NavType.StringType
+                        nullable = true
+                        defaultValue = null
+                    },
+                    navArgument("from") {
+                        type = NavType.StringType
+                        nullable = true
+                        defaultValue = null
+                    }
+                )
+            ) { backStackEntry ->
+                val type = backStackEntry.arguments?.getString("type")
+                val expiryYY = backStackEntry.arguments?.getString("expiryYY")
+                val from = backStackEntry.arguments?.getString("from")
+                Log.d("EmpowerSWR", "DocumentsScreen NavHost params: type=$type, expiryYY=$expiryYY, from=$from")
+                DocumentsScreen(
+                    uploadService = NetworkModule.uploadService,
+                    navController = navController,
+                    type = type,
+                    expiryYY = expiryYY,
+                    from = from
                 )
             }
         }

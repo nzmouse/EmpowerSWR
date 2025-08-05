@@ -201,7 +201,7 @@ fun HomeScreen(
             Log.d("EmpowerSWR", "No token, redirecting to login")
         } else {
             viewModel.fetchWorkerDetails { error ->
-                Log.e("EmpowerSWR", "fetchWorkerDetails error: ${error.message}")
+                error?.message ?: "Failed to load worker details"
             }
         }
     }
@@ -326,9 +326,10 @@ fun HomeScreen(
                 coroutineScope.launch {
                     try {
                         isRefreshing = true
-                        viewModel.fetchWorkerDetails {
-                            refreshError = "Refresh failed: ${it.message}"
-                            Log.e("EmpowerSWR", "Refresh error: ${it.message}")
+                        viewModel.fetchWorkerDetails { error ->
+                            refreshError = error?.message?.let { "Refresh failed: $it" } ?: "Refresh failed"
+                            Log.e("EmpowerSWR", error?.message?.let { "Refresh error: $it" } ?: "Refresh error")
+                            isRefreshing = false  // Ensure reset after callback
                         }
                         delay(1000)
                     } catch (e: Exception) {

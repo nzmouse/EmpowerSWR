@@ -1,5 +1,7 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
+
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -71,4 +73,5 @@ dependencies {
     implementation(libs.signature.pad)
     implementation(libs.itext7.core)
     debugImplementation(libs.androidx.compose.ui.tooling)
+    implementation(libs.coil.compose) // Added for image loading
 }
