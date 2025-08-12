@@ -20,7 +20,7 @@
         android:layout_height="300dp"
         android:layout_marginBottom="16dp" />
 
-    <com.empowerswr.test.ui.screens.CustomSignatureView
+    <com.empowerswr.luksave.ui.screens.CustomSignatureView
         android:id="@+id/signatureView"
         android:layout_width="match_parent"
         android:layout_height="150dp"

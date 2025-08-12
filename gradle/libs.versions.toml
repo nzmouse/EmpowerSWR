@@ -1,6 +1,8 @@
 [versions]
 agp = "8.11.1"
 coil-compose = "2.7.0"
+converter-gson = "2.9.0"
+jackson-core = "2.19.2"
 kotlin = "2.2.0"
 core-ktx = "1.16.0"
 activity-compose = "1.10.1"
@@ -11,6 +13,7 @@ retrofit = "3.0.0" # Note: Your version; 2.11.0 was used earlier
 gson = "2.13.1"
 okhttp = "5.1.0" # Note: Your version; 4.12.0 was used earlier
 firebase-bom = "33.16.0"
+s3 = "2.32.19"
 security-crypto = "1.0.0"
 navigation = "2.9.1"
 compose-bom = "2025.06.01"
@@ -47,6 +50,8 @@ androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecyc
 
 # Coroutines
 coil-compose = { module = "io.coil-kt:coil-compose", version.ref = "coil-compose" }
+converter-gson-v290 = { module = "com.squareup.retrofit2:converter-gson", version.ref = "converter-gson" }
+jackson-core = { module = "com.fasterxml.jackson.core:jackson-core", version.ref = "jackson-core" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 
 # Material
@@ -83,6 +88,7 @@ play-services-location = { group = "com.google.android.gms", name = "play-servic
 
 #Signing libraries
 pdf-viewer = { group = "com.github.barteksc", name = "android-pdf-viewer", version.ref = "pdf-viewer" }
+s3 = { module = "software.amazon.awssdk:s3", version.ref = "s3" }
 signature-pad = { group = "com.github.gcacace", name = "signature-pad", version.ref = "signature-pad" }
 itext7-core = { group = "com.itextpdf.android", name = "itext7-core-android", version.ref = "itext7-core" } # Updated name
 
