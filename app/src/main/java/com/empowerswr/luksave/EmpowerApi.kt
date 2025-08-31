@@ -93,12 +93,11 @@ interface EmpowerApi {
     ): List<TeamLocation>
 
     @POST("team.php/teams/feedback")
-    suspend fun submitFeedback(
-        @Query("token") token: String,
-        @Query("workerId") workerId: String,
-        @Body body: Map<String, @JvmSuppressWildcards Any>
-    ): Response<Unit>
+    suspend fun submitTeamFeedback(@Query("token") token: String, @Body body: FeedbackRequest): Response<Unit>
 
+    // Global feedback
+    @POST("feedback.php/submit")
+    suspend fun submitFeedback(@Query("token") token: String, @Body body: FeedbackRequest): Response<Unit>
     @POST("team.php/teams/accept")
     suspend fun acceptApplication(
         @Query("token") token: String,

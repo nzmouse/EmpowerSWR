@@ -166,8 +166,10 @@ data class TeamLocation(
 )
 
 data class FeedbackRequest(
-    @SerializedName("teamId") val teamId: Int,
-    @SerializedName("feedbackText") val feedbackText: String
+    val workerId: String,
+    val teamId: Int?,
+    val feedbackText: String,
+    val screen: String?
 )
 
 data class FeedbackResponse(

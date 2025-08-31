@@ -373,9 +373,7 @@ fun DocumentsScreen(
                                                             launchSingleTop = true
                                                             restoreState = false
                                                         }
-                                                        // Log back stack after navigation
-                                                        val backStack = navController.currentBackStack.value.map { it.destination.route }
-                                                        Timber.d("DocumentsScreen: Back stack after navigation: $backStack")
+
                                                     } catch (e: Exception) {
                                                         Timber.e(e, "DocumentsScreen: Navigation failed")
                                                         snackbarHostState.showSnackbar("Navigation failed: ${e.message}")

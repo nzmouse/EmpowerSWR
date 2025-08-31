@@ -676,13 +676,30 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    suspend fun submitFeedback(token: String, workerId: String, teamId: Int, feedbackText: String) {
-        val body = mapOf(
-            "teamId" to teamId,
-            "feedbackText" to feedbackText
+    suspend fun submitFeedback(token: String, workerId: String, teamId: Int, feedbackText: String, screen: String?) {
+        if (workerId.isBlank()) {
+            Timber.w("Worker ID is blank")
+            throw IllegalArgumentException("Worker ID cannot be blank")
+        }
+        val trimmedFeedback = feedbackText.trim()
+        if (trimmedFeedback.isEmpty()) {
+            Timber.w("Feedback text is empty after trimming")
+            throw IllegalArgumentException("Feedback text cannot be empty")
+        }
+        val body = FeedbackRequest(
+            workerId = workerId,
+            teamId = if (teamId == 0) null else teamId, // Convert teamId=0 to null for /feedback/submit
+            feedbackText = trimmedFeedback,
+            screen = screen
         )
-        val response = api.submitFeedback(token, workerId, body)
+        Timber.d("Submitting feedback to %s: %s", if (teamId > 0) "/team.php/teams/feedback" else "/feedback/submit", body)
+        val response = if (teamId > 0) {
+            api.submitTeamFeedback(token, body)
+        } else {
+            api.submitFeedback(token, body)
+        }
         if (!response.isSuccessful) {
+            Timber.e("Feedback submission failed with code %d: %s", response.code(), response.errorBody()?.string())
             throw HttpException(response)
         }
     }

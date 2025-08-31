@@ -39,11 +39,15 @@ import java.time.Instant
 import java.util.*
 
 // Define inputFormats at the top level for global access
-private val inputFormats = listOf(
-    SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.getDefault()).apply { timeZone = TimeZone.getTimeZone("UTC") },
-    SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).apply { timeZone = TimeZone.getTimeZone("UTC") },
-    SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply { timeZone = TimeZone.getTimeZone("UTC") }
-)
+private val inputFormats: List<SimpleDateFormat>
+    get() {
+        val currentLocale = Locale.getDefault()
+        return listOf(
+            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", currentLocale).apply { timeZone = TimeZone.getTimeZone("UTC") },
+            SimpleDateFormat("yyyy-MM-dd HH:mm:ss", currentLocale).apply { timeZone = TimeZone.getTimeZone("UTC") },
+            SimpleDateFormat("yyyy-MM-dd", currentLocale).apply { timeZone=TimeZone.getTimeZone("UTC") }
+        )
+    }
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TeamScreen(
@@ -394,7 +398,7 @@ fun TeamCard(
                             isLoading = true
                             coroutineScope.launch {
                                 try {
-                                    viewModel.submitFeedback(token, workerId, team.teamId, feedbackText)
+                                    viewModel.submitFeedback(token, workerId, team.teamId, feedbackText, null)
                                     snackbarHostState.showSnackbar("Feedback submitted successfully")
                                     showFeedbackDialog = false
                                     feedbackText = ""
@@ -462,7 +466,10 @@ fun TeamCard(
     // Team Information Card
     Card(
         modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer
+        )
     ) {
         Column(
             modifier = Modifier
@@ -617,7 +624,10 @@ fun TeamCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 8.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.inversePrimary
+        )
     ) {
         Column(
             modifier = Modifier
@@ -634,7 +644,10 @@ fun TeamCard(
             // Assignment 1 Subcard
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                )
             ) {
                 Row(
                     modifier = Modifier
@@ -725,7 +738,7 @@ fun TeamCard(
                         .fillMaxWidth()
                         .padding(top = 8.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer
                     ),
                     elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                 ) {
@@ -820,7 +833,7 @@ fun TeamCard(
                         .fillMaxWidth()
                         .padding(top = 8.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer
                     ),
                     elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                 ) {

@@ -60,13 +60,8 @@ fun HomeScreen(
     val checkInError by viewModel.checkInError
     val notifications by viewModel.notifications
     val notificationFromIntent by viewModel.notificationFromIntent
-    val isPhoneInputValid by remember { derivedStateOf {
-        phone.matches(Regex("^\\d*$"))
-    } }
-    val isPhoneSubmitValid by remember { derivedStateOf {
-        val valid = phone.matches(Regex("^\\d{7,15}$"))
-        valid
-    } }
+    val isPhoneInputValid by remember { derivedStateOf { phone.matches(Regex("^\\d*$")) } }
+    val isPhoneSubmitValid by remember { derivedStateOf { phone.matches(Regex("^\\d{7,15}$")) } }
     var showCheckInSection by remember { mutableStateOf(true) }
     var isRefreshing by remember { mutableStateOf(false) }
     var showSettingsPrompt by remember { mutableStateOf(false) }
@@ -87,7 +82,7 @@ fun HomeScreen(
         } else {
             showSettingsPrompt = true
             locationError = "Location permission denied. Please enable it in app settings."
-            Timber.tag("HomeScreen").e("Location Permission denied, showing settings prompt")
+            Timber.tag("HomeScreen").e("Location permission denied, showing settings prompt")
         }
     }
 
@@ -140,9 +135,7 @@ fun HomeScreen(
     // Settings prompt dialog
     if (showSettingsPrompt) {
         AlertDialog(
-            onDismissRequest = {
-                showSettingsPrompt = false
-            },
+            onDismissRequest = { showSettingsPrompt = false },
             title = { Text("Permission Required") },
             text = { Text("Location permission is required for check-in. Please enable it in app settings.") },
             confirmButton = {
@@ -159,9 +152,7 @@ fun HomeScreen(
             },
             dismissButton = {
                 Button(
-                    onClick = {
-                        showSettingsPrompt = false
-                    }
+                    onClick = { showSettingsPrompt = false }
                 ) {
                     Text("Cancel")
                 }
@@ -171,7 +162,7 @@ fun HomeScreen(
 
     // Force recomposition on workerDetails change
     LaunchedEffect(workerDetails) {
-        Timber.i( "workerDetails changed")
+        Timber.i("workerDetails changed")
     }
 
     LaunchedEffect(token) {
@@ -203,6 +194,7 @@ fun HomeScreen(
         }
     }
 
+    // Handle notifications from ViewModel (likely from NotificationHandler)
     LaunchedEffect(notifications) {
         notifications.forEach { notification ->
             snackbarScope.launch {
@@ -214,26 +206,32 @@ fun HomeScreen(
                     )
                     viewModel.removeNotification(notification)
                 } catch (e: Exception) {
-                    Timber.tag("HomeScreen").e(e,"Failed to show notification Snackbar")
+                    Timber.tag("HomeScreen").e(e, "Failed to show notification Snackbar")
                 }
             }
         }
     }
 
+    // Handle intent-based notifications
     LaunchedEffect(notificationFromIntent) {
-        val (title, body) = notificationFromIntent
-        if (title != null || body != null) {
-            snackbarScope.launch {
-                try {
-                    val result = snackbarHostState.showSnackbar(
-                        message = "$title: $body",
-                        actionLabel = "Dismiss",
-                        duration = SnackbarDuration.Indefinite
-                    )
-                    viewModel.setNotificationFromIntent(null, null)
-                } catch (e: Exception) {
-                    Timber.tag("HomeScreen").e(e, "Failed to show intent notification Snackbar")
+        Timber.i("notificationFromIntent: $notificationFromIntent")
+        notificationFromIntent?.let { (title, body) ->
+            if (title != null && body != null && title.isNotBlank() && body.isNotBlank()) {
+                snackbarScope.launch {
+                    try {
+                        Timber.i("Showing Snackbar for Title: $title, Body: $body")
+                        snackbarHostState.showSnackbar(
+                            message = "$title: $body",
+                            actionLabel = "Dismiss",
+                            duration = SnackbarDuration.Long // Auto-dismiss for testing
+                        )
+                        viewModel.setNotificationFromIntent(null, null)
+                    } catch (e: Exception) {
+                        Timber.tag("HomeScreen").e(e, "Failed to show intent notification Snackbar")
+                    }
                 }
+            } else {
+                Timber.i("Invalid notification data: Title=$title, Body=$body")
             }
         }
     }
@@ -243,7 +241,7 @@ fun HomeScreen(
         error?.let {
             snackbarScope.launch {
                 try {
-                    val result = snackbarHostState.showSnackbar(
+                    snackbarHostState.showSnackbar(
                         message = it,
                         actionLabel = "Dismiss",
                         duration = SnackbarDuration.Long
@@ -268,7 +266,7 @@ fun HomeScreen(
         checkInError?.let { message ->
             snackbarScope.launch {
                 try {
-                    val result = snackbarHostState.showSnackbar(
+                    snackbarHostState.showSnackbar(
                         message = message,
                         actionLabel = "Dismiss",
                         duration = SnackbarDuration.Long
@@ -277,7 +275,7 @@ fun HomeScreen(
                     viewModel.clearCheckInState()
                     isCheckingIn = false
                 } catch (e: Exception) {
-                    Timber.tag("HomeScreen").e(e,"Failed to show check-in Snackbar:")
+                    Timber.tag("HomeScreen").e(e, "Failed to show check-in Snackbar")
                 }
             }
         }
@@ -294,7 +292,7 @@ fun HomeScreen(
                         isRefreshing = true
                         viewModel.fetchWorkerDetails { error ->
                             refreshError = error?.message?.let { "Refresh failed: $it" } ?: "Refresh failed"
-                            isRefreshing = false  // Ensure reset after callback
+                            isRefreshing = false
                         }
                         delay(1000)
                     } catch (e: Exception) {
@@ -529,7 +527,6 @@ fun HomeScreen(
                                         style = MaterialTheme.typography.bodyLarge,
                                         color = MaterialTheme.colorScheme.onSurface
                                     )
-
                                 }
                             }
                         }
@@ -607,7 +604,6 @@ suspend fun performCheckInAndSaveLocation(
 ) {
     try {
         viewModel.checkIn(phone)
-
         if (ContextCompat.checkSelfPermission(
                 context,
                 Manifest.permission.ACCESS_FINE_LOCATION
@@ -637,7 +633,7 @@ suspend fun performCheckInAndSaveLocation(
         }
     } catch (e: Exception) {
         onError("Failed to process check-in or location: ${e.message}")
-        Timber.tag("HomeScreen").e(e,"Check-in or location error")
+        Timber.tag("HomeScreen").e(e, "Check-in or location error")
     }
 }
 
