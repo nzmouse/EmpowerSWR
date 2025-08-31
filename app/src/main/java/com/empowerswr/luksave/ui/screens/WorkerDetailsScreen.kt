@@ -1,7 +1,6 @@
 package com.empowerswr.luksave.ui.screens
 
 import android.content.Context
-import android.util.Log
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -16,7 +15,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
-import com.empowerswr.luksave.Alert
 import com.empowerswr.luksave.EmpowerViewModel
 import com.empowerswr.luksave.PrefsHelper
 import com.google.firebase.messaging.FirebaseMessaging
@@ -26,6 +24,8 @@ import java.text.SimpleDateFormat
 import java.util.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.ui.text.font.FontStyle
+import kotlinx.coroutines.Dispatchers
+import timber.log.Timber
 
 fun formatDate(dateString: String?): String {
     if (dateString.isNullOrEmpty()) return "N/A"
@@ -34,8 +34,8 @@ fun formatDate(dateString: String?): String {
         val outputFormat = SimpleDateFormat("dd-MMM-yyyy", Locale.getDefault())
         val date = inputFormat.parse(dateString)
         date?.let { outputFormat.format(it) } ?: "N/A"
-    } catch (e: Exception) {
-        Log.e("EmpowerSWR", "Date format error for $dateString: ${e.message}")
+    } catch (_: Exception) {
+        Timber.tag("WorkerDetailsScreen").e("Date format error for, %s", dateString)
         "N/A"
     }
 }
@@ -47,12 +47,12 @@ fun WorkerDetailsScreen(
     context: Context,
     navController: NavHostController
 ) {
-    Log.d("EmpowerSWR", "WorkerDetailsScreen composable called")
     val coroutineScope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
     var fcmError by remember { mutableStateOf<String?>(null) }
     var workerError by remember { mutableStateOf<String?>(null) }
     var historyError by remember { mutableStateOf<String?>(null) }
+    val snackbarScope = rememberCoroutineScope { Dispatchers.Main }
     val snackbarHostState = remember { SnackbarHostState() }
     val token by viewModel.token
     val workerDetails by viewModel.workerDetails
@@ -63,7 +63,6 @@ fun WorkerDetailsScreen(
     val pendingFields by viewModel.pendingFields
 
     var isRefreshing by remember { mutableStateOf(false) }
-    var refreshError by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(token) {
         if (token == null) {
             navController.navigate("login") {
@@ -76,7 +75,7 @@ fun WorkerDetailsScreen(
                 }
             }
             viewModel.fetchHistory { error ->
-                historyError = error?.message ?: "Failed to load history"
+                historyError = error.message ?: "Failed to load history"
             }
         }
     }
@@ -98,40 +97,46 @@ fun WorkerDetailsScreen(
     }
 
     LaunchedEffect(Unit) {
-        Log.d("EmpowerSWR", "LaunchedEffect for FCM token retrieval started")
         delay(5000)
         FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
             if (task.isSuccessful) {
                 val fcmToken = task.result
-                Log.d("EmpowerSWR", "FCM Token: $fcmToken")
+                Timber.i("FCM Token loaded")
                 PrefsHelper.saveFcmToken(context, fcmToken)
                 val workerId = PrefsHelper.getWorkerId(context)
                 if (workerId != null) {
                     viewModel.updateFcmToken(fcmToken, workerId)
                 } else {
-                    Log.w("EmpowerSWR", "No workerId available for FCM token update")
+                    Timber.i("No workerId available for FCM token update")
                 }
             } else {
                 fcmError = "Failed to get FCM token: ${task.exception?.message}"
-                Log.e("EmpowerSWR", "FCM Token Error: ${task.exception?.message}")
+                Timber.tag("WorkerDetailsScreen").e(task.exception?.message, "FCM Token Error")
             }
         }
     }
 
     LaunchedEffect(alerts) {
-        Log.d("EmpowerSWR", "Alerts updated: $alerts")
-        alerts.forEach { alert: Alert ->
-            Log.d("EmpowerSWR", "Showing Snackbar for alert: ${alert.message}")
-            snackbarHostState.showSnackbar(alert.message)
+        alerts.forEach { alert ->
+            snackbarScope.launch {
+                try {
+                    snackbarHostState.showSnackbar(
+                        message = alert.message,
+                        actionLabel = "Dismiss",
+                        duration = SnackbarDuration.Long
+                    )
+                    viewModel.removeAlert(alert)
+                    Timber.tag("WorkerDetailsScreen").i("Displayed alert: %s", alert.message)
+                } catch (e: Exception) {
+                    Timber.tag("WorkerDetailsScreen").e(e, "Failed to show alert Snackbar")
+                }
+            }
         }
     }
 
     LaunchedEffect(notifications) {
         notifications.forEach { notification ->
-            Log.d(
-                "EmpowerSWR",
-                "Showing Snackbar for notification: ${notification.title}: ${notification.body}"
-            )
+
             coroutineScope.launch {
                 try {
                     val result = snackbarHostState.showSnackbar(
@@ -139,10 +144,9 @@ fun WorkerDetailsScreen(
                         actionLabel = "Dismiss",
                         duration = SnackbarDuration.Indefinite
                     )
-                    Log.d("EmpowerSWR", "Snackbar shown with result: $result")
                     viewModel.removeNotification(notification)
                 } catch (e: Exception) {
-                    Log.e("EmpowerSWR", "Failed to show Snackbar: ${e.message}", e)
+                    Timber.tag("WorkerDetailsScreen").e(e, "Failed to show Snackbar")
                 }
             }
         }
@@ -151,7 +155,6 @@ fun WorkerDetailsScreen(
     LaunchedEffect(notificationFromIntent) {
         val (title, body) = notificationFromIntent
         if (title != null || body != null) {
-            Log.d("EmpowerSWR", "Showing Snackbar for intent notification: $title: $body")
             coroutineScope.launch {
                 try {
                     val result = snackbarHostState.showSnackbar(
@@ -159,14 +162,11 @@ fun WorkerDetailsScreen(
                         actionLabel = "Dismiss",
                         duration = SnackbarDuration.Indefinite
                     )
-                    Log.d("EmpowerSWR", "Snackbar shown with result: $result")
                     viewModel.setNotificationFromIntent(null, null)
                 } catch (e: Exception) {
-                    Log.e("EmpowerSWR", "Failed to show Snackbar: ${e.message}", e)
+                    Timber.tag("WorkerDetailsScreen").e(e, "Failed to show Snackbar")
                 }
             }
-        } else {
-            Log.d("EmpowerSWR", "No intent notification to display")
         }
     }
 
@@ -176,25 +176,18 @@ fun WorkerDetailsScreen(
         PullToRefreshBox(
             isRefreshing = isRefreshing,
             onRefresh = {
-                Log.d("EmpowerSWR", "Swipe-to-refresh triggered")
                 coroutineScope.launch {
                     try {
                         isRefreshing = true
                         viewModel.fetchWorkerDetails { error ->
-                            refreshError =
-                                error?.message?.let { "Refresh failed: $it" } ?: "Refresh failed"
-                            Log.e(
-                                "EmpowerSWR",
-                                error?.message?.let { "Refresh error: $it" } ?: "Refresh error")
+                            Timber.tag("WorkerDetailsScreen").e("Refresh error")
                             isRefreshing = false  // Ensure reset after callback
                         }
                         delay(1000)
                     } catch (e: Exception) {
-                        refreshError = "Refresh failed: ${e.message}"
-                        Log.e("EmpowerSWR", "Refresh error: ${e.message}")
+                        Timber.tag("WorkerDetailsScreen").e(e, "Refresh error")
                     } finally {
                         isRefreshing = false
-                        Log.d("EmpowerSWR", "Swipe-to-refresh completed")
                     }
                 }
             },

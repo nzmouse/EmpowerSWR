@@ -5,12 +5,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
-import android.os.Build
-import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -28,6 +27,7 @@ import com.empowerswr.luksave.EmpowerViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import timber.log.Timber
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -37,7 +37,6 @@ fun LoginScreen(
     navController: NavHostController, // Added NavHostController parameter
     onLoginSuccess: () -> Unit
 ) {
-    Log.d("EmpowerSWR", "LoginScreen composable called, Android version: ${Build.VERSION.SDK_INT}, Release: ${Build.VERSION.RELEASE}")
     val coroutineScope = rememberCoroutineScope()
     val snackbarScope = rememberCoroutineScope { Dispatchers.Main }
     var workerId by remember { mutableStateOf("") }
@@ -47,8 +46,7 @@ fun LoginScreen(
     val keyboardController = LocalSoftwareKeyboardController.current
     val loginErrorState by viewModel.loginError
     var showSettingsPrompt by remember { mutableStateOf(false) }
-    val activity = context.findEmpowerActivity() ?: run {
-        Log.e("EmpowerSWR", "Context is not a ComponentActivity")
+    context.findEmpowerActivity() ?: run {
         throw IllegalStateException("LoginScreen must be called within a ComponentActivity")
     }
 
@@ -58,13 +56,9 @@ fun LoginScreen(
     ) { permissions ->
         val fineGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true
         val coarseGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
-        Log.d("EmpowerSWR", "Permission result: fineGranted=$fineGranted, coarseGranted=$coarseGranted")
-        if (fineGranted || coarseGranted) {
-            Log.d("EmpowerSWR", "Location permission granted")
-        } else {
-            showSettingsPrompt = true
-            loginError = "Location permission denied. Please enable it in app settings."
-            Log.d("EmpowerSWR", "Permission denied, showing settings prompt")
+        if (!fineGranted && !coarseGranted) {
+            showSettingsPrompt = true;
+            loginError = "Location permission denied. Please enable it in app settings.";
         }
     }
 
@@ -72,30 +66,22 @@ fun LoginScreen(
     val settingsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) {
-        Log.d("EmpowerSWR", "Returned from settings, rechecking permission")
-        if (ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
-        ) {
-            Log.d("EmpowerSWR", "Location permission granted after settings")
-        } else {
-            showSettingsPrompt = true
-            loginError = "Location permission still denied. Please enable it in settings."
-            Log.d("EmpowerSWR", "Location permission still denied after settings")
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
+            != PackageManager.PERMISSION_GRANTED) {
+            showSettingsPrompt = true;
+            loginError = "Location permission still denied. Please enable it in settings.";
+            Timber.tag("InformationScreen").e("Location permission still denied after settings");
         }
     }
 
     // Check permissions on start with delay to ensure lifecycle stability
     LaunchedEffect(Unit) {
-        Log.d("EmpowerSWR", "Checking initial permission state in LoginScreen")
         delay(500) // Ensure composable is stable
         if (ContextCompat.checkSelfPermission(
                 context,
                 Manifest.permission.ACCESS_FINE_LOCATION
             ) != PackageManager.PERMISSION_GRANTED
         ) {
-            Log.d("EmpowerSWR", "Initial permission request in LoginScreen")
             permissionLauncher.launch(arrayOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,
                 Manifest.permission.ACCESS_COARSE_LOCATION
@@ -105,13 +91,11 @@ fun LoginScreen(
 
     // Check permission and request
     fun checkAndRequestLocationPermission() {
-        Log.d("EmpowerSWR", "Checking location permission")
         if (ContextCompat.checkSelfPermission(
                 context,
                 Manifest.permission.ACCESS_FINE_LOCATION
             ) == PackageManager.PERMISSION_GRANTED
         ) {
-            Log.d("EmpowerSWR", "Location permission already granted")
             snackbarScope.launch {
                 snackbarHostState.showSnackbar(
                     message = "Location permission already granted",
@@ -120,7 +104,6 @@ fun LoginScreen(
                 )
             }
         } else {
-            Log.d("EmpowerSWR", "Launching permission request")
             permissionLauncher.launch(arrayOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,
                 Manifest.permission.ACCESS_COARSE_LOCATION
@@ -133,7 +116,6 @@ fun LoginScreen(
         AlertDialog(
             onDismissRequest = {
                 showSettingsPrompt = false
-                Log.d("EmpowerSWR", "Settings dialog dismissed")
             },
             title = { Text("Permission Required") },
             text = { Text("Location permission is required for check-in. Please enable it in app settings.") },
@@ -144,7 +126,6 @@ fun LoginScreen(
                         val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
                         intent.data = Uri.fromParts("package", context.packageName, null)
                         settingsLauncher.launch(intent)
-                        Log.d("EmpowerSWR", "Opening app settings for permission")
                     }
                 ) {
                     Text("Open Settings")
@@ -154,7 +135,6 @@ fun LoginScreen(
                 Button(
                     onClick = {
                         showSettingsPrompt = false
-                        Log.d("EmpowerSWR", "Settings dialog cancelled")
                     }
                 ) {
                     Text("Cancel")
@@ -173,10 +153,10 @@ fun LoginScreen(
                         actionLabel = "Dismiss",
                         duration = SnackbarDuration.Long
                     )
-                    Log.d("EmpowerSWR", "Login error Snackbar shown: $message, result: $result")
+                    Timber.tag("LoginScreen").e("Login error Snackbar shown: Message= %s Result = %s", message, result)
                     viewModel.clearCheckInState()
                 } catch (e: Exception) {
-                    Log.e("EmpowerSWR", "Failed to show login error Snackbar: ${e.message}", e)
+                    Timber.tag("LoginScreen").e(e, "Failed to show login error Snackbar")
                 }
             }
         }
@@ -191,7 +171,7 @@ fun LoginScreen(
                 .padding(padding)
                 .padding(horizontal = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+            verticalArrangement = Arrangement.Top
         ) {
             Text(
                 text = "Login",
@@ -223,7 +203,6 @@ fun LoginScreen(
                     onDone = {
                         keyboardController?.hide()
                         coroutineScope.launch {
-                            Log.d("EmpowerSWR", "Login button clicked")
                             viewModel.login(workerId, pin)
                             if (viewModel.token.value != null) {
                                 onLoginSuccess()
@@ -236,7 +215,6 @@ fun LoginScreen(
             Spacer(modifier = Modifier.height(16.dp))
             Button(
                 onClick = {
-                    Log.d("EmpowerSWR", "Login button clicked")
                     coroutineScope.launch {
                         viewModel.login(workerId, pin)
                         if (viewModel.token.value != null) {
@@ -263,14 +241,12 @@ fun LoginScreen(
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier
                     .clickable {
-                        Log.d("EmpowerSWR", "Register link clicked")
                         navController.navigate("registration")
                     }
             )
             Spacer(modifier = Modifier.height(16.dp))
             Button(
                 onClick = {
-                    Log.d("EmpowerSWR", "Manual permission check button pressed")
                     coroutineScope.launch {
                         checkAndRequestLocationPermission()
                     }

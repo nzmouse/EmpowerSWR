@@ -1,8 +1,10 @@
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.google.services)
+    id("com.google.firebase.crashlytics")
 }
 
 kotlin {
@@ -18,15 +20,26 @@ android {
     defaultConfig {
         applicationId = "com.empowerswr.luksave"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 1
-        versionName = "1.0"
+        versionName = "1.0.0"
     }
-
+    signingConfigs {
+        create("release") {
+            storeFile = file(properties["RELEASE_STORE_FILE"] as String? ?: "C:/Users/SOWMi/AndroidStudioProjects/Luksave/keystore.jks")
+            storePassword = properties["RELEASE_STORE_PASSWORD"] as String? ?: "your-password"
+            keyAlias = properties["RELEASE_KEY_ALIAS"] as String? ?: "your-alias"
+            keyPassword = properties["RELEASE_KEY_PASSWORD"] as String? ?: "your-password"
+        }
+    }
     buildTypes {
         release {
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+        debug {
+            isDebuggable = true
         }
     }
 
@@ -39,9 +52,6 @@ android {
         compose = true
     }
 
-    composeOptions {
-        kotlinCompilerExtensionVersion = "2.0.21"
-    }
 
     ndkVersion = "29.0.13599879-rc2"
 
@@ -59,10 +69,12 @@ android {
             ))
         }
     }
+
 }
 
 dependencies {
     implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.activity.compose)
     implementation(libs.bundles.compose)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.navigation.compose)
@@ -71,6 +83,9 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.bundles.retrofit)
     implementation(libs.bundles.okhttp)
+    if (android.buildTypes.getByName("debug").isDebuggable) {
+        implementation(libs.okhttp.logging.interceptor)
+    }
     implementation(platform(libs.firebase.bom))
     implementation(libs.bundles.firebase)
     implementation(libs.androidx.security.crypto)
@@ -91,5 +106,6 @@ dependencies {
         exclude(group = "software.amazon.awssdk", module = "third-party-jackson-core")
     }
     implementation(libs.jackson.core)
-
+    implementation(libs.timber)
+    implementation(libs.firebase.crashlytics)
 }

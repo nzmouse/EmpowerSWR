@@ -20,17 +20,11 @@ interface EmpowerApi {
     @GET("api.php/alerts")
     suspend fun getAlerts(@Query("token") token: String): List<Alert>
 
-    @POST("api.php/worker/update")
-    suspend fun updateWorker(@Query("workerId") workerId: String, @Body request: WorkerUpdateRequest): WorkerUpdateResponse
-
     @POST("api.php/checkin")
     suspend fun checkIn(@Query("token") token: String, @Body request: CheckInRequest): CheckInResponse
 
     @POST("api.php/update-fcm-token")
     suspend fun updateFcmToken(@Query("workerId") workerId: String, @Body token: String)
-
-    @GET("api.php/teams")
-    suspend fun getTeams(): List<TeamResponse>
 
     @GET("api.php/history")
     suspend fun getWorkerHistory(@Query("workerId") workerId: String): List<HistoryResponse>
@@ -82,4 +76,39 @@ interface EmpowerApi {
         @Query("token") token: String,
         @Query("workerId") workerId: String
     ): List<DirectoryEntry>
+
+    @GET("team.php/teams")
+    suspend fun getTeams(
+        @Query("token") token: String,
+        @Query("workerId") workerId: String,
+        @Query("limit") limit: Int = 50,
+        @Query("offset") offset: Int = 0
+    ): List<Team>
+
+    @GET("team.php/teams/locations")
+    suspend fun getTeamLocations(
+        @Query("token") token: String,
+        @Query("workerId") workerId: String,
+        @Query("teamId") teamId: Int
+    ): List<TeamLocation>
+
+    @POST("team.php/teams/feedback")
+    suspend fun submitFeedback(
+        @Query("token") token: String,
+        @Query("workerId") workerId: String,
+        @Body body: Map<String, @JvmSuppressWildcards Any>
+    ): Response<Unit>
+
+    @POST("team.php/teams/accept")
+    suspend fun acceptApplication(
+        @Query("token") token: String,
+        @Body body: Map<String, String>
+    ): Response<Unit>
+
+    @GET("team.php/teams/notices")
+    suspend fun getNotices(
+        @Query("token") token: String,
+        @Query("workerId") workerId: String
+    ): Response<Map<String, String?>>
+
 }

@@ -12,11 +12,12 @@ pluginManagement {
     }
 }
 dependencyResolutionManagement {
+    @Suppress("UnstableApiUsage")
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    @Suppress("UnstableApiUsage")
     repositories {
         google()
         mavenCentral()
-        maven { url = uri("https://maven.google.com/") }
         maven { url = uri("https://jitpack.io") }
         maven { url = uri("https://repo.itextsupport.com/release") }
         maven { url = uri("https://repository.liferay.com/nexus/content/repositories/public") } //Fallback
@@ -24,5 +25,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "EmpowerSWRApp0.2"
+rootProject.name = "Luksave"
 include(":app")

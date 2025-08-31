@@ -2,8 +2,6 @@ package com.empowerswr.luksave.ui.screens
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
-import android.util.Log
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -19,12 +17,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import androidx.navigation.NavHostController
 import com.empowerswr.luksave.DirectoryEntry
 import com.empowerswr.luksave.EmpowerViewModel
 import com.empowerswr.luksave.PrefsHelper
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
+import timber.log.Timber
 
 @Composable
 fun InformationScreen(
@@ -41,16 +41,13 @@ fun InformationScreen(
 
     // Debug: Log token and workerId
     LaunchedEffect(token, workerId) {
-        Log.d("EmpowerSWR", "InformationScreen - Token: $token, WorkerId: $workerId")
         if (token == null || workerId.isEmpty()) {
-            Log.e("EmpowerSWR", "Token or WorkerId is null, navigating to login")
             navController.navigate("login") {
                 popUpTo(navController.graph.startDestinationId) { inclusive = true }
                 launchSingleTop = true
             }
         } else {
             try {
-                Log.d("EmpowerSWR", "Fetching directory with token=$token, workerId=$workerId")
                 viewModel.fetchDirectory(token!!, workerId)
                 fetchError = null
             } catch (e: HttpException) {
@@ -60,13 +57,13 @@ fun InformationScreen(
                     else -> "Failed to load directory: ${e.message()}"
                 }
                 fetchError = errorMessage
-                Log.e("EmpowerSWR", "Fetch directory error: $errorMessage")
+                Timber.tag("InformationScreen").e(errorMessage, "Fetch directory error")
                 coroutineScope.launch {
                     snackbarHostState.showSnackbar(errorMessage)
                 }
             } catch (e: Exception) {
                 fetchError = "Failed to load directory: ${e.message}"
-                Log.e("EmpowerSWR", "Fetch directory error: ${e.message}")
+                Timber.tag("InformationScreen").e(e, "Fetch directory error")
                 coroutineScope.launch {
                     snackbarHostState.showSnackbar("Failed to load directory: ${e.message}")
                 }
@@ -122,7 +119,6 @@ fun InformationScreen(
                         coroutineScope.launch {
                             if (token != null && workerId.isNotEmpty()) {
                                 try {
-                                    Log.d("EmpowerSWR", "Retrying directory fetch with token=$token, workerId=$workerId")
                                     viewModel.fetchDirectory(token!!, workerId)
                                     fetchError = null
                                 } catch (e: HttpException) {
@@ -132,20 +128,20 @@ fun InformationScreen(
                                         else -> "Failed to load directory: ${e.message()}"
                                     }
                                     fetchError = errorMessage
-                                    Log.e("EmpowerSWR", "Retry fetch directory error: $errorMessage")
+                                    Timber.tag("InformationScreen").e(e, "Retry fetch directory error")
                                     coroutineScope.launch {
                                         snackbarHostState.showSnackbar(errorMessage)
                                     }
                                 } catch (e: Exception) {
                                     fetchError = "Failed to load directory: ${e.message}"
-                                    Log.e("EmpowerSWR", "Retry fetch directory error: ${e.message}")
+                                    Timber.tag("InformationScreen").e(e, "Retry fetch directory error")
                                     coroutineScope.launch {
                                         snackbarHostState.showSnackbar("Failed to load directory: ${e.message}")
                                     }
                                 }
                             } else {
                                 fetchError = "Please log in to view directory"
-                                Log.e("EmpowerSWR", "Retry failed: Token or WorkerId is null")
+                                Timber.tag("InformationScreen").e("Retry failed: Token or WorkerId is null")
                                 navController.navigate("login") {
                                     popUpTo(navController.graph.startDestinationId) { inclusive = true }
                                     launchSingleTop = true
@@ -181,14 +177,14 @@ fun InformationScreen(
                     items(entries) { entry ->
                         DirectoryCard(entry) { lat, long ->
                             val label = entry.dirName
-                            val uri = Uri.parse("geo:$lat,$long?q=$lat,$long($label)&z=15")
+                            val uri = "geo:$lat,$long?q=$lat,$long($label)&z=15".toUri()
                             val intent = Intent(Intent.ACTION_VIEW, uri).apply {
                                 setPackage("com.google.android.apps.maps")
                             }
                             try {
                                 context.startActivity(intent)
                             } catch (e: Exception) {
-                                Log.e("EmpowerSWR", "Map open error: ${e.message}")
+                                Timber.tag("InformationScreen").e(e, "Map open error")
                                 coroutineScope.launch {
                                     snackbarHostState.showSnackbar("Failed to open Maps: ${e.message}")
                                 }

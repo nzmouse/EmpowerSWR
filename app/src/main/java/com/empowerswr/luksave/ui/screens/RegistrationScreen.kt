@@ -1,8 +1,6 @@
 package com.empowerswr.luksave.ui.screens
 
-import android.content.Context
 import android.content.Intent
-import android.util.Log
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -25,21 +23,21 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.net.toUri
 import androidx.navigation.NavHostController
 import com.empowerswr.luksave.EmpowerViewModel
 import com.empowerswr.luksave.PrefsHelper
 import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import timber.log.Timber
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RegistrationScreen(
     viewModel: EmpowerViewModel,
-    context: Context,
     navController: NavHostController
 ) {
-    Log.d("EmpowerSWR", "RegistrationScreen composable called")
     val coroutineScope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
     var passport by rememberSaveable { mutableStateOf("") }
@@ -68,10 +66,8 @@ fun RegistrationScreen(
 
     // Show Worker ID dialog after registration
     if (showWorkerIdDialog) {
-        Log.d("EmpowerSWR", "Rendering Worker ID dialog")
         Dialog(
             onDismissRequest = {
-                Log.d("EmpowerSWR", "Worker ID dialog dismiss attempted")
                 // Prevent dismissal without OK
             },
             properties = DialogProperties(
@@ -123,13 +119,11 @@ fun RegistrationScreen(
                     Spacer(modifier = Modifier.height(16.dp))
                     Button(
                         onClick = {
-                            Log.d("EmpowerSWR", "Worker ID dialog OK pressed")
                             showWorkerIdDialog = false
                             dialogDismissed = true
                             navController.navigate("login") {
                                 popUpTo("registration") { inclusive = true }
                             }
-                            Log.d("EmpowerSWR", "Navigating to login after dialog dismissal")
                         },
                         modifier = Modifier.fillMaxWidth(0.5f)
                     ) {
@@ -143,35 +137,32 @@ fun RegistrationScreen(
     // Handle registration completion
     LaunchedEffect(token) {
         if (token != null && !registrationComplete && !showWorkerIdDialog) {
-            Log.d("EmpowerSWR", "LaunchedEffect triggered for token: token=$token")
             // Clear existing token to prevent navigation conflicts
             val existingToken = PrefsHelper.getToken(localContext)
             if (existingToken != null && existingToken != token) {
-                Log.d("EmpowerSWR", "Clearing existing token: $existingToken")
+                Timber.i("Clearing existing token")
                 PrefsHelper.clearToken(localContext)
             }
-            Log.d("EmpowerSWR", "Attempting to fetch FCM token after registration")
             FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
                 if (task.isSuccessful) {
                     val newFcmToken = task.result
                     fcmToken = newFcmToken
                     val workerId = PrefsHelper.getWorkerId(localContext)
                     if (workerId != null) {
-                        Log.d("EmpowerSWR", "FCM token retrieved: $newFcmToken, workerId=$workerId")
+                        Timber.i("FCM token retrieved")
                         try {
                             viewModel.updateFcmToken(newFcmToken, workerId)
-                            Log.d("EmpowerSWR", "updateFcmToken called for workerId=$workerId, fcmToken=$newFcmToken")
                         } catch (e: Exception) {
                             fcmError = "Failed to update FCM token: ${e.message}"
-                            Log.e("EmpowerSWR", "updateFcmToken error: ${e.message}", e)
+                            Timber.tag("RegistrationScreen").e(e, "updateFcmToken error")
                         }
                     } else {
                         fcmError = "Worker ID not found for FCM token update"
-                        Log.e("EmpowerSWR", "Worker ID not found for FCM token update")
+                        Timber.tag("RegistrationScreen").e("Worker ID not found for FCM token update")
                     }
                 } else {
                     fcmError = "Failed to get FCM token: ${task.exception?.message}"
-                    Log.e("EmpowerSWR", "FCM token fetch error: ${task.exception?.message}")
+                    Timber.tag("RegistrationScreen").e(task.exception?.message, "FCM token fetch error")
                 }
             }
             viewModel.fetchWorkerDetails()
@@ -179,56 +170,49 @@ fun RegistrationScreen(
             PrefsHelper.setRegistered(localContext, true)
             registrationComplete = true
             showWorkerIdDialog = true
-            Log.d("EmpowerSWR", "Registration complete, showing Worker ID dialog")
         }
     }
 
     // Prevent premature navigation
     LaunchedEffect(dialogDismissed) {
         if (dialogDismissed) {
-            Log.d("EmpowerSWR", "Dialog dismissed, allowing navigation")
             // Navigation is handled in the dialog's OK button
         } else if (token != null && registrationComplete && !showWorkerIdDialog) {
-            Log.d("EmpowerSWR", "Preventing navigation until dialog is dismissed")
         }
     }
 
     LaunchedEffect(Unit) {
-        Log.d("EmpowerSWR", "LaunchedEffect for initial FCM token retrieval started")
         delay(5000)
         FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
             if (task.isSuccessful) {
                 fcmToken = task.result
-                Log.d("EmpowerSWR", "Initial FCM Token retrieved: $fcmToken")
+                Timber.i("Initial FCM Token retrieved")
                 PrefsHelper.saveFcmToken(localContext, fcmToken!!)
             } else {
                 fcmError = "Failed to get initial FCM token: ${task.exception?.message}"
-                Log.e("EmpowerSWR", "Initial FCM Token error: ${task.exception?.message}")
+                Timber.tag("RegistrationScreen").e(task.exception?.message, "Initial FCM Token error")
             }
         }
     }
 
     LaunchedEffect(alerts) {
-        Log.d("EmpowerSWR", "Alerts updated: $alerts")
+        Timber.i("Alerts updated")
         alerts.forEach { alert ->
-            Log.d("EmpowerSWR", "Showing Snackbar for alert: ${alert.message}")
             snackbarHostState.showSnackbar(alert.message)
         }
     }
 
     LaunchedEffect(notifications) {
         notifications.forEach { notification ->
-            Log.d("EmpowerSWR", "Showing Snackbar for notification: ${notification.title}: ${notification.body}")
             try {
                 val result = snackbarHostState.showSnackbar(
                     message = "${notification.title}: ${notification.body}",
                     actionLabel = "Dismiss",
                     duration = SnackbarDuration.Indefinite
                 )
-                Log.d("EmpowerSWR", "Snackbar shown with result: $result")
                 viewModel.removeNotification(notification)
             } catch (e: Exception) {
-                Log.e("EmpowerSWR", "Failed to show Snackbar: ${e.message}", e)
+                Timber.tag("RegistrationScreen").e(e, "Failed to show Snackbar")
             }
         }
     }
@@ -236,20 +220,16 @@ fun RegistrationScreen(
     LaunchedEffect(notificationFromIntent) {
         val (title, body) = notificationFromIntent
         if (title != null || body != null) {
-            Log.d("EmpowerSWR", "Showing Snackbar for intent notification: $title: $body")
             try {
                 val result = snackbarHostState.showSnackbar(
                     message = "$title: $body",
                     actionLabel = "Dismiss",
                     duration = SnackbarDuration.Indefinite
                 )
-                Log.d("EmpowerSWR", "Snackbar shown with result: $result")
                 viewModel.setNotificationFromIntent(null, null)
             } catch (e: Exception) {
-                Log.e("EmpowerSWR", "Failed to show Snackbar: ${e.message}", e)
+                Timber.tag("RegistrationScreen").e(e,"Failed to show Snackbar")
             }
-        } else {
-            Log.d("EmpowerSWR", "No intent notification to display")
         }
     }
 
@@ -344,7 +324,7 @@ fun RegistrationScreen(
                         keyboardController?.hide()
                         if (pinError == null && pin.isNotEmpty()) {
                             coroutineScope.launch {
-                                Log.d("EmpowerSWR", "Keyboard Done: Attempting registration with passport: $passport, surname: $surname, pin=$pin")
+                                Timber.i("Attempting registration")
                                 viewModel.register(passport, surname, pin)
                             }
                         }
@@ -380,11 +360,9 @@ fun RegistrationScreen(
             Spacer(modifier = Modifier.height(16.dp))
             Button(
                 onClick = {
-                    Log.d("EmpowerSWR", "Register button clicked: passport=$passport, surname=$surname, pin=$pin")
                     keyboardController?.hide()
                     if (pinError == null && pin.isNotEmpty()) {
                         coroutineScope.launch {
-                            Log.d("EmpowerSWR", "Coroutine launched for registration")
                             viewModel.register(passport, surname, pin)
                         }
                     }
@@ -408,7 +386,7 @@ fun RegistrationScreen(
                 color = MaterialTheme.colorScheme.onBackground,
                 modifier = Modifier.clickable {
                     val intent = Intent(Intent.ACTION_DIAL).apply {
-                        data = android.net.Uri.parse("tel:5551234")
+                        data = "tel:5551234".toUri()
                     }
                     localContext.startActivity(intent)
                 }

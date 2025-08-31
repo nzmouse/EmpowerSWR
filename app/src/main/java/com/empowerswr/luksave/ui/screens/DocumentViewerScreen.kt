@@ -1,19 +1,13 @@
 package com.empowerswr.luksave.ui.screens
 
-import android.Manifest
 import android.app.Activity
 import android.app.DownloadManager
 import android.content.BroadcastReceiver
-import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Environment
-import android.provider.MediaStore
-import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -26,6 +20,8 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -33,33 +29,90 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
 import androidx.navigation.NavController
+import androidx.navigation.compose.currentBackStackEntryAsState
+import com.empowerswr.luksave.DownloadState
+import com.empowerswr.luksave.MainActivity
 import com.empowerswr.luksave.PrefsHelper
+import com.empowerswr.luksave.findActivity
+import com.empowerswr.luksave.network.ListFilesService
 import com.github.barteksc.pdfviewer.PDFView
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileInputStream
-import java.io.FileOutputStream
-import java.io.OutputStream
 import java.net.URLDecoder
+import timber.log.Timber
+import java.net.URLEncoder
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DocumentViewerScreen(
     navController: NavController,
     filename: String,
-    url: String
+    url: String,
+    listFilesService: ListFilesService,
+    downloadState: State<DownloadState>
 ) {
+    // Recomposition counter for debugging
+    var recompositionCount by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) {
+        recompositionCount++
+        Timber.d("DocumentViewerScreen: Recomposition count: $recompositionCount")
+    }
+
+    // Navigation attempt counter
+    var navigationAttemptCount by remember { mutableStateOf(0) }
+    LaunchedEffect(filename, url) {
+        navigationAttemptCount++
+        Timber.d("DocumentViewerScreen: Navigation attempt count: $navigationAttemptCount for filename=$filename, url=$url")
+    }
+
+    Timber.d("DocumentViewerScreen: Composing with filename=$filename, url=$url")
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     var pdfFile by remember { mutableStateOf<File?>(null) }
     var currentPage by remember { mutableStateOf(1) }
     var totalPages by remember { mutableStateOf(1) }
-    val decodedFilename = URLDecoder.decode(filename, "UTF-8")
+    var hasNavigated by rememberSaveable { mutableStateOf(false) } // Prevent re-navigation
+    var targetFilename by remember { mutableStateOf<String?>(null) } // Store target filename
+    val decodedFilename = try {
+        URLDecoder.decode(filename.replace("+", "%20"), "UTF-8").trim()
+    } catch (e: Exception) {
+        Timber.e(e, "DocumentViewerScreen: Failed to decode filename: $filename")
+        filename.replace("+", " ").trim()
+    }
+    val encodedFilename = try {
+        URLEncoder.encode(decodedFilename, "UTF-8")
+    } catch (e: Exception) {
+        Timber.e(e, "DocumentViewerScreen: Failed to encode filename: $decodedFilename")
+        decodedFilename
+    }
 
-    // Permission handling for storage (if needed)
+    // Map document types to nicknames
+    val documentTypes = listOf(
+        "Passport" to "PPT",
+        "National ID Card" to "NID",
+        "Birth Certificate" to "BC",
+        "Driving Licence" to "DL",
+        "Police Clearance" to "PC",
+        "Medical" to "MED",
+        "Contract" to "CON",
+        "Spouse Letter" to "SPO",
+        "Chief/Pastor Letter" to "REF"
+    )
+    val docTypeCode = documentTypes.find { decodedFilename.endsWith("- ${it.second}.pdf") }?.second
+        ?: documentTypes.find { decodedFilename == "${it.first}.pdf" }?.second
+    val nicknameBase = docTypeCode?.let { documentTypes.find { it.second == docTypeCode }?.first } ?: "Unknown"
+    val possibleNicknames = (0..10).flatMap { i ->
+        val base = if (i == 0) "$nicknameBase" else "$nicknameBase-$i"
+        listOf("$base.pdf", "$base.jpg", "$base.png")
+    }
+
+    // Permission handling
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
@@ -67,114 +120,251 @@ fun DocumentViewerScreen(
             scope.launch {
                 snackbarHostState.showSnackbar("Storage permission denied")
             }
-            Log.e("DocumentViewer", "Storage permission denied")
+            Timber.e("DocumentViewerScreen: Storage permission denied")
         }
     }
 
-    // Check storage permission (for API < 29)
     val hasStoragePermission = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
         ContextCompat.checkSelfPermission(
             context,
-            Manifest.permission.WRITE_EXTERNAL_STORAGE
-        ) == PackageManager.PERMISSION_GRANTED
+            android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
     } else {
-        true // MediaStore handles permissions on API 29+
+        true
     }
 
-    // Register DownloadManager receiver
+    // Dynamic BroadcastReceiver for downloads
     var downloadId by remember { mutableStateOf<Long?>(null) }
-    val downloadReceiver = remember {
-        object : BroadcastReceiver() {
+    DisposableEffect(Unit) {
+        val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
+                Timber.d("DocumentViewerScreen: Broadcast received, action: ${intent?.action}, extras: ${intent?.extras?.keySet()?.joinToString()}")
                 val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1) ?: -1
+                Timber.d("DocumentViewerScreen: Broadcast download ID: $id, expected: $downloadId")
                 if (id == downloadId) {
                     val downloadManager = context?.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
                     val query = DownloadManager.Query().setFilterById(id)
                     downloadManager?.query(query)?.use { cursor ->
                         if (cursor.moveToFirst()) {
                             val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                            Timber.d("DocumentViewerScreen: Download status: $status")
                             if (status == DownloadManager.STATUS_SUCCESSFUL) {
                                 val localUri = cursor.getString(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI))
-                                val file = File(Uri.parse(localUri).path ?: return@use)
-                                if (file.exists()) {
+                                Timber.d("DocumentViewerScreen: Local URI: $localUri")
+                                val file = if (localUri != null) File(localUri.toUri().path ?: return@use) else null
+                                val normalizedFilename = targetFilename?.replace("+", " ")?.replace("%20", " ")?.trim() ?: decodedFilename
+                                val foundFile = file?.takeIf { it.exists() } ?: File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), normalizedFilename)
+                                Timber.d("DocumentViewerScreen: Download completed, file: ${foundFile.absolutePath}, exists: ${foundFile.exists()}")
+                                if (foundFile.exists()) {
                                     scope.launch(Dispatchers.Main) {
-                                        pdfFile = file
-                                        Log.d("DocumentViewer", "File downloaded to: ${file.absolutePath}, size: ${file.length()} bytes")
+                                        pdfFile = foundFile
                                     }
                                 } else {
                                     scope.launch(Dispatchers.Main) {
                                         snackbarHostState.showSnackbar("Downloaded file not found")
-                                        Log.e("DocumentViewer", "Downloaded file not found: ${file.absolutePath}")
+                                        Timber.e("DocumentViewerScreen: Downloaded file not found: ${foundFile.absolutePath}")
                                     }
                                 }
                             } else {
                                 val reason = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
                                 scope.launch(Dispatchers.Main) {
                                     snackbarHostState.showSnackbar("Download failed: Status $status, Reason $reason")
-                                    Log.e("DocumentViewer", "Download failed with status: $status, reason: $reason")
+                                    Timber.e("DocumentViewerScreen: Download failed with status: $status, reason: $reason")
                                 }
                             }
-                        } else {
-                            scope.launch(Dispatchers.Main) {
-                                snackbarHostState.showSnackbar("Download query failed")
-                                Log.e("DocumentViewer", "Download query returned empty cursor")
-                            }
-                        }
-                    } ?: run {
-                        scope.launch(Dispatchers.Main) {
-                            snackbarHostState.showSnackbar("Download manager unavailable")
-                            Log.e("DocumentViewer", "Download manager is null")
                         }
                     }
                 }
             }
         }
-    }
-
-    DisposableEffect(context) {
-        val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
-        ContextCompat.registerReceiver(
-            context,
-            downloadReceiver,
+        val filter = IntentFilter().apply {
+            addAction(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
+            addAction(DownloadManager.ACTION_NOTIFICATION_CLICKED)
+            addAction(DownloadManager.ACTION_VIEW_DOWNLOADS)
+        }
+        Timber.d("DocumentViewerScreen: Registering dynamic receiver with filter: $filter")
+        context.registerReceiver(
+            receiver,
             filter,
-            ContextCompat.RECEIVER_NOT_EXPORTED
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) Context.RECEIVER_NOT_EXPORTED else Context.RECEIVER_EXPORTED
         )
         onDispose {
-            context.unregisterReceiver(downloadReceiver)
+            try {
+                context.unregisterReceiver(receiver)
+                Timber.d("DocumentViewerScreen: Unregistered dynamic receiver")
+            } catch (e: IllegalArgumentException) {
+                Timber.e(e, "DocumentViewerScreen: Receiver not registered")
+            }
         }
     }
 
-    LaunchedEffect(url) {
+    // Handle download state
+    LaunchedEffect(downloadState.value) {
+        when (val state = downloadState.value) {
+            is DownloadState.Completed -> {
+                val normalizedFilename = state.filename.replace("+", " ").replace("%20", " ").trim()
+                if (possibleNicknames.contains(normalizedFilename) || normalizedFilename == decodedFilename || normalizedFilename == encodedFilename) {
+                    val file = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), normalizedFilename)
+                    Timber.d("DocumentViewerScreen: Download completed, file: ${file.absolutePath}, exists: ${file.exists()}")
+                    if (file.exists() && file.extension.lowercase() == "pdf") {
+                        pdfFile = file
+                    } else {
+                        snackbarHostState.showSnackbar("Downloaded file not found or not a PDF")
+                        Timber.e("DocumentViewerScreen: Downloaded file not found or not a PDF: ${file.absolutePath}")
+                    }
+                }
+            }
+            is DownloadState.Failed -> {
+                val normalizedFailedFilename = state.filename.replace("+", " ").replace("%20", " ").trim()
+                if (possibleNicknames.contains(normalizedFailedFilename) || normalizedFailedFilename == decodedFilename || normalizedFailedFilename == encodedFilename) {
+                    snackbarHostState.showSnackbar("Download failed: ${state.message}")
+                    Timber.e("DocumentViewerScreen: Download failed: ${state.message}")
+                }
+            }
+            else -> { /* Ignore other states */ }
+        }
+    }
+
+    // Download PDF with version check
+    LaunchedEffect(key1 = "$decodedFilename-$url-$hasStoragePermission") {
+        if (hasNavigated) {
+            Timber.d("DocumentViewerScreen: Skipping download due to navigation guard")
+            return@LaunchedEffect
+        }
+        hasNavigated = true
         if (PrefsHelper.getJwtToken(context).isEmpty()) {
-            Log.e("DocumentViewer", "JWT token is empty")
+            Timber.e("DocumentViewerScreen: JWT token is empty")
             Toast.makeText(context, "Invalid session, please log in", Toast.LENGTH_SHORT).show()
             (context as? Activity)?.finish()
             return@LaunchedEffect
         }
-        if (!hasStoragePermission && Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            permissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        if (!hasStoragePermission) {
+            Timber.d("DocumentViewerScreen: Requesting storage permission")
+            permissionLauncher.launch(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
             return@LaunchedEffect
         }
         scope.launch(Dispatchers.IO) {
             try {
-                Log.d("DocumentViewer", "Starting download for URL: $url")
-                val file = File(context.cacheDir, decodedFilename)
-                if (file.exists()) {
-                    Log.d("DocumentViewer", "File already exists: ${file.absolutePath}")
-                    scope.launch(Dispatchers.Main) {
-                        pdfFile = file
+                // Check Downloads directory for possible nicknames
+                var file: File? = null
+                var tempNickname: String? = null
+                for (nickname in possibleNicknames) {
+                    val testFile = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), nickname)
+                    if (testFile.exists()) {
+                        file = testFile
+                        tempNickname = nickname
+                        break
                     }
-                    return@launch
                 }
-                val request = DownloadManager.Request(Uri.parse(url))
-                    .setDestinationInExternalFilesDir(context, null, decodedFilename)
+                // Also check original filename (decoded and encoded)
+                val originalFile = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), decodedFilename)
+                if (originalFile.exists() && file == null) {
+                    file = originalFile
+                    tempNickname = decodedFilename
+                }
+                val encodedFile = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), encodedFilename)
+                if (encodedFile.exists() && file == null) {
+                    file = encodedFile
+                    tempNickname = encodedFilename
+                }
+
+                var downloadUrl = url
+                // Try to fetch fresh URL
+                val token = PrefsHelper.getJwtToken(context)
+                val fileList = listFilesService.listFiles("Bearer $token")
+                val fileItem = fileList?.find {
+                    it.name == decodedFilename ||
+                            it.name == filename ||
+                            it.name == encodedFilename ||
+                            it.name.replace("+", " ").replace("%20", " ").trim() == decodedFilename ||
+                            it.name.lowercase() == decodedFilename.lowercase() ||
+                            possibleNicknames.contains(it.name)
+                }
+                if (fileItem != null) {
+                    downloadUrl = fileItem.url
+                    Timber.d("DocumentViewerScreen: Fresh URL: $downloadUrl, fileItem name: ${fileItem.name}")
+                } else {
+                    Timber.w("DocumentViewerScreen: File not found in list, using passed URL: $url")
+                }
+
+                // Use nickname for saving
+                val computedTargetFilename = if (docTypeCode != null) {
+                    // Find an available nickname (e.g., Driving Licence.pdf, Driving Licence-1.pdf)
+                    var candidateNickname = "$nicknameBase.pdf"
+                    var index = 0
+                    var candidateFile = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), candidateNickname)
+                    while (candidateFile.exists()) {
+                        index++
+                        candidateNickname = "$nicknameBase-$index.pdf"
+                        candidateFile = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), candidateNickname)
+                    }
+                    candidateNickname
+                } else {
+                    decodedFilename
+                }
+                targetFilename = computedTargetFilename
+
+                // Check if local file is valid
+                if (file != null && tempNickname != null) {
+                    val localLastModified = file.lastModified()
+                    val oneDayAgo = System.currentTimeMillis() - 24 * 60 * 60 * 1000
+                    if (localLastModified > oneDayAgo && file.extension.lowercase() == "pdf") {
+                        Timber.i("DocumentViewerScreen: Using local file: ${file.absolutePath}, last modified: $localLastModified")
+                        scope.launch(Dispatchers.Main) {
+                            pdfFile = file
+                            targetFilename = tempNickname // Update targetFilename for display
+                        }
+                        return@launch
+                    } else {
+                        Timber.d("DocumentViewerScreen: Local file too old or not a PDF, deleting: ${file.absolutePath}")
+                        file.delete()
+                    }
+                }
+
+                // Delete any existing files with suffixes (e.g., (1), (2))
+                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                val baseName = computedTargetFilename.substringBeforeLast(".")
+                downloadsDir.listFiles()?.forEach { existingFile ->
+                    if (existingFile.name.startsWith(baseName) && existingFile.name.matches(Regex("$baseName(\\s*\\(\\d+\\))?\\.(pdf|jpg|png)"))) {
+                        Timber.d("DocumentViewerScreen: Deleting existing file: ${existingFile.absolutePath}")
+                        existingFile.delete()
+                    }
+                }
+
+                Timber.d("DocumentViewerScreen: Preparing download request for $downloadUrl, target filename: $computedTargetFilename")
+                val request = DownloadManager.Request(downloadUrl.toUri())
+                    .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, computedTargetFilename)
                     .setAllowedOverMetered(true)
                     .setAllowedOverRoaming(true)
+                    .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                 val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
                 downloadId = downloadManager.enqueue(request)
-                Log.d("DocumentViewer", "Download enqueued with ID: $downloadId")
+                Timber.i("DocumentViewerScreen: Download enqueued with ID: $downloadId")
+                (context.findActivity() as? MainActivity)?.storeDownload(downloadId!!, computedTargetFilename)
+
+                // Fallback polling if BroadcastReceiver fails
+                var attempts = 0
+                val maxAttempts = 30 // 30 seconds at 1-second intervals
+                while (attempts < maxAttempts && pdfFile == null) {
+                    val checkFile = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), computedTargetFilename)
+                    if (checkFile.exists() && checkFile.extension.lowercase() == "pdf") {
+                        Timber.i("DocumentViewerScreen: File found via polling: ${checkFile.absolutePath}")
+                        scope.launch(Dispatchers.Main) {
+                            pdfFile = checkFile
+                        }
+                        break
+                    }
+                    delay(1000)
+                    attempts++
+                }
+                if (attempts >= maxAttempts) {
+                    Timber.e("DocumentViewerScreen: File not found after polling: $computedTargetFilename")
+                    scope.launch(Dispatchers.Main) {
+                        snackbarHostState.showSnackbar("Download timed out")
+                    }
+                }
             } catch (e: Exception) {
-                Log.e("DocumentViewer", "Error initiating download: ${e.message}", e)
+                Timber.e(e, "DocumentViewerScreen: Error initiating download")
                 scope.launch(Dispatchers.Main) {
                     snackbarHostState.showSnackbar("Error initiating download: ${e.message}")
                 }
@@ -188,7 +378,7 @@ fun DocumentViewerScreen(
                 title = { Text("View Document") },
                 navigationIcon = {
                     IconButton(onClick = {
-                        Log.d("DocumentViewer", "Back button clicked")
+                        Timber.d("DocumentViewerScreen: Navigating back")
                         navController.popBackStack()
                     }) {
                         Icon(
@@ -205,35 +395,25 @@ fun DocumentViewerScreen(
                 actions = {
                     IconButton(
                         onClick = {
-                            Log.d("DocumentViewer", "Download clicked")
                             scope.launch(Dispatchers.IO) {
                                 try {
                                     pdfFile?.let { file ->
-                                        val outputStream = getPublicDownloadsOutputStream(context, decodedFilename)
-                                        if (outputStream == null) {
-                                            Log.e("DocumentViewer", "Failed to access Downloads directory")
-                                            scope.launch(Dispatchers.Main) {
-                                                snackbarHostState.showSnackbar("Error: Downloads directory not accessible")
-                                            }
-                                            return@launch
-                                        }
-                                        FileInputStream(file).use { input ->
-                                            outputStream.use { output: OutputStream ->
-                                                val buffer = ByteArray(1024)
-                                                var bytesRead: Int
-                                                while (input.read(buffer).also { bytesRead = it } != -1) {
-                                                    output.write(buffer, 0, bytesRead)
+                                        val destFile = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), targetFilename ?: decodedFilename)
+                                        if (!destFile.exists()) {
+                                            FileInputStream(file).use { input ->
+                                                destFile.outputStream().use { output ->
+                                                    input.copyTo(output)
                                                 }
                                             }
                                         }
                                         scope.launch(Dispatchers.Main) {
-                                            snackbarHostState.showSnackbar("PDF downloaded to Downloads folder")
+                                            snackbarHostState.showSnackbar("PDF available in Downloads folder")
                                         }
                                     } ?: throw IllegalStateException("No PDF file available")
                                 } catch (e: Exception) {
-                                    Log.e("DocumentViewer", "Error downloading PDF: ${e.message}", e)
+                                    Timber.e(e, "DocumentViewerScreen: Error copying PDF to Downloads")
                                     scope.launch(Dispatchers.Main) {
-                                        snackbarHostState.showSnackbar("Error downloading PDF: ${e.message}")
+                                        snackbarHostState.showSnackbar("Error copying PDF: ${e.message}")
                                     }
                                 }
                             }
@@ -251,6 +431,7 @@ fun DocumentViewerScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
+        Timber.d("DocumentViewerScreen: Composing Scaffold")
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -259,7 +440,7 @@ fun DocumentViewerScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Text(
-                text = decodedFilename,
+                text = targetFilename ?: decodedFilename,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onBackground
             )
@@ -269,28 +450,47 @@ fun DocumentViewerScreen(
                     .background(Color.White)
             ) {
                 pdfFile?.let { file ->
+                    Timber.d("DocumentViewerScreen: Rendering PDFView for ${file.absolutePath}")
+                    if (!file.exists()) {
+                        Timber.e("DocumentViewerScreen: PDF file does not exist: ${file.absolutePath}")
+                        Text("Error: PDF file not found")
+                        return@let
+                    }
+                    if (file.length() == 0L) {
+                        Timber.e("DocumentViewerScreen: PDF file is empty: ${file.absolutePath}")
+                        Text("Error: PDF file is empty")
+                        return@let
+                    }
                     AndroidView(
                         factory = { ctx ->
-                            PDFView(ctx, null)
+                            PDFView(ctx, null).apply {
+                                fromFile(file)
+                                    .defaultPage(currentPage - 1)
+                                    .onPageChange { page, pageCount ->
+                                        scope.launch {
+                                            Timber.d("DocumentViewerScreen: PDFView page changed to ${page + 1} of $pageCount")
+                                            delay(100) // Debounce
+                                            currentPage = page + 1
+                                            totalPages = pageCount
+                                        }
+                                    }
+                                    .load()
+                            }
                         },
                         modifier = Modifier.fillMaxSize(),
                         update = { pdfView ->
-                            Log.d("DocumentViewer", "Updating PDFView with file: ${file.absolutePath}")
-                            pdfView.fromFile(file)
-                                .defaultPage(currentPage - 1)
-                                .onPageChange { page, pageCount ->
-                                    currentPage = page + 1
-                                    totalPages = pageCount
-                                    Log.d("DocumentViewer", "Page changed to $currentPage of $totalPages")
-                                }
-                                .load()
+                            if (pdfView.currentPage != currentPage - 1) {
+                                Timber.d("DocumentViewerScreen: Updating PDFView to page ${currentPage - 1}")
+                                pdfView.jumpTo(currentPage - 1, true)
+                            }
                         }
                     )
                 } ?: Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
-                    CircularProgressIndicator()
+                    Timber.d("DocumentViewerScreen: Showing loading text")
+                    Text("Loading PDF...")
                 }
             }
             Row(
@@ -299,41 +499,29 @@ fun DocumentViewerScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(
-                    onClick = { if (currentPage > 1) currentPage-- },
+                    onClick = {
+                        if (currentPage > 1) {
+                            Timber.d("DocumentViewerScreen: Navigating to previous page: ${currentPage - 1}")
+                            currentPage--
+                        }
+                    },
                     enabled = currentPage > 1
                 ) {
                     Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Previous Page")
                 }
                 Text("Page $currentPage of $totalPages")
                 IconButton(
-                    onClick = { if (currentPage < totalPages) currentPage++ },
+                    onClick = {
+                        if (currentPage < totalPages) {
+                            Timber.d("DocumentViewerScreen: Navigating to next page: ${currentPage + 1}")
+                            currentPage++
+                        }
+                    },
                     enabled = currentPage < totalPages
                 ) {
                     Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Next Page")
                 }
             }
         }
-    }
-}
-
-private fun getPublicDownloadsOutputStream(context: Context, fileName: String): OutputStream? {
-    return try {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val values = ContentValues().apply {
-                put(MediaStore.Downloads.DISPLAY_NAME, fileName)
-                put(MediaStore.Downloads.MIME_TYPE, "application/pdf")
-                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-            }
-            val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-            uri?.let { context.contentResolver.openOutputStream(it) }
-        } else {
-            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-            if (!downloadsDir.exists()) downloadsDir.mkdirs()
-            val destFile = File(downloadsDir, fileName)
-            FileOutputStream(destFile)
-        }
-    } catch (e: Exception) {
-        Log.e("DocumentViewer", "Error accessing Downloads directory: ${e.message}", e)
-        null
     }
 }

@@ -1,11 +1,13 @@
 package com.empowerswr.luksave.ui.screens
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
-import android.net.Uri
-import android.util.Log
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,6 +30,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.navigation.NavHostController
@@ -37,11 +41,13 @@ import com.empowerswr.luksave.PrefsHelper
 import com.google.android.gms.location.LocationServices
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import timber.log.Timber
 import java.text.SimpleDateFormat
 import java.util.*
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
-import java.time.temporal.ChronoUnit
+
 data class CheckInInfo(
     val statusText: String,
     val countdownText: String?,
@@ -70,12 +76,11 @@ private fun formatSubcardTitle(dateString: String?): String {
         }
         date?.let { outputFormat.format(it) } ?: "N/A"
     } catch (e: Exception) {
-        Log.e("EmpowerSWR", "Title date format error for $dateString: ${e.message}")
+        Timber.tag("FlightsScreen").e(e, "Title date format error for %s", dateString)
         "N/A"
     }
 }
 
-// Format time for departure (h:mm a)
 private fun formatTime(dateString: String?): String {
     if (dateString.isNullOrEmpty()) return "N/A"
     return try {
@@ -88,22 +93,25 @@ private fun formatTime(dateString: String?): String {
         }
         date?.let { outputFormat.format(it) } ?: "N/A"
     } catch (e: Exception) {
-        Log.e("EmpowerSWR", "Time format error for $dateString: ${e.message}")
+        Timber.tag("FlightsScreen").e(e, "Time format error for %s", dateString)
         "N/A"
     }
 }
 
-// Format arrival time (h:mm a if same day, E, h:mm a if different day)
 private fun formatArrivalTime(arrDate: String?, depDate: String?): String {
     if (arrDate.isNullOrEmpty() || depDate.isNullOrEmpty()) return "N/A"
     return try {
         val inputFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).apply {
             timeZone = TimeZone.getTimeZone("Pacific/Efate")
         }
-        val arr = inputFormat.parse(arrDate)
-        val dep = inputFormat.parse(depDate)
-        val calArr = Calendar.getInstance(TimeZone.getTimeZone("Pacific/Efate")).apply { time = arr }
-        val calDep = Calendar.getInstance(TimeZone.getTimeZone("Pacific/Efate")).apply { time = dep }
+        val arr = inputFormat.parse(arrDate) ?: return "N/A"
+        val dep = inputFormat.parse(depDate) ?: return "N/A"
+        val calArr = Calendar.getInstance(TimeZone.getTimeZone("Pacific/Efate")).apply {
+            time = arr
+        }
+        val calDep = Calendar.getInstance(TimeZone.getTimeZone("Pacific/Efate")).apply {
+            time = dep
+        }
         val isSameDay = calArr.get(Calendar.YEAR) == calDep.get(Calendar.YEAR) &&
                 calArr.get(Calendar.DAY_OF_YEAR) == calDep.get(Calendar.DAY_OF_YEAR)
         val outputFormat = if (isSameDay) {
@@ -115,7 +123,7 @@ private fun formatArrivalTime(arrDate: String?, depDate: String?): String {
         }
         outputFormat.format(arr)
     } catch (e: Exception) {
-        Log.e("EmpowerSWR", "Arrival time format error for $arrDate: ${e.message}")
+        Timber.tag("FlightsScreen").e(e, "Arrival time format error for arrDate=%s, depDate=%s", arrDate, depDate)
         "N/A"
     }
 }
@@ -133,7 +141,7 @@ private fun formatPdbDate(dateString: String?): String {
         }
         date?.let { outputFormat.format(it) } ?: "N/A"
     } catch (e: Exception) {
-        Log.e("EmpowerSWR", "Date format error for $dateString: ${e.message}")
+        Timber.tag("FlightsScreen").e(e, "Date format error for %s", dateString)
         "N/A"
     }
 }
@@ -149,8 +157,8 @@ private fun formatCheckInTime(depDate: String?, hoursBefore: Double): String {
             .minusMinutes(((hoursBefore % 1.0) * 60).toLong())
         val outputFormat = DateTimeFormatter.ofPattern("h:mm a 'VUT'").withZone(vutZone)
         outputFormat.format(checkInTime)
-    } catch (e: Exception) {
-        Log.e("EmpowerSWR", "Check-in time format error for $depDate: ${e.message}")
+    } catch (_: Exception) {
+        Timber.tag("FlightsScreen").e("Check-in time format error for %s", depDate)
         "N/A"
     }
 }
@@ -165,7 +173,6 @@ private fun formatCountdown(targetTime: Long): String {
     val days = diffMillis / (1000 * 60 * 60 * 24)
     val hours = (diffMillis % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)
     val minutes = (diffMillis % (1000 * 60 * 60)) / (1000 * 60)
-    Log.d("EmpowerSWR", "formatCountdown: now=$now (device TZ: ${deviceTimeZone.id}), targetTime=$targetTime, diffMillis=$diffMillis")
     return buildString {
         if (days > 0) append("$days day${if (days > 1) "s" else ""}, ")
         if (hours > 0 || days > 0) append("$hours hour${if (hours > 1) "s" else ""}, ")
@@ -176,11 +183,10 @@ private fun formatCountdown(targetTime: Long): String {
 // Get check-in info
 private fun getCheckInInfo(depDate: String?, hoursBefore: Double, isInternational: Boolean): CheckInInfo {
     val prefix = if (isInternational) "JEK IN" else "Jek in BIFO"
-    if (depDate.isNullOrEmpty()) return CheckInInfo("N/A", null, false, false)
+    if (depDate.isNullOrEmpty()) return CheckInInfo("N/A", null, isOpen = false, isClosed = false)
     try {
         val vutZone = java.time.ZoneId.of("Pacific/Efate")
         val deviceZone = java.time.ZoneId.systemDefault()
-        Log.d("EmpowerSWR", "Device timezone: ${deviceZone.id}")
         val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(vutZone)
         val departureTime = ZonedDateTime.parse(depDate, formatter)
         val checkInTime = departureTime.minusHours(hoursBefore.toLong())
@@ -188,13 +194,7 @@ private fun getCheckInInfo(depDate: String?, hoursBefore: Double, isInternationa
         val closeTime = departureTime.minusHours(1)
         val now = ZonedDateTime.now(deviceZone)
         val outputFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss z").withZone(vutZone)
-        Log.d(
-            "EmpowerSWR",
-            "getCheckInInfo: depDate=$depDate (VUT, epoch=${departureTime.toInstant().toEpochMilli()}), " +
-                    "checkInTime=${outputFormat.format(checkInTime)} (epoch=${checkInTime.toInstant().toEpochMilli()}), " +
-                    "closeTime=${outputFormat.format(closeTime)} (epoch=${closeTime.toInstant().toEpochMilli()}), " +
-                    "now=${outputFormat.format(now)} (device TZ: ${deviceZone.id}, epoch=${now.toInstant().toEpochMilli()})"
-        )
+
         if (now.isBefore(checkInTime)) {
             val countdown = formatCountdown(checkInTime.toInstant().toEpochMilli())
             return CheckInInfo(
@@ -220,8 +220,8 @@ private fun getCheckInInfo(depDate: String?, hoursBefore: Double, isInternationa
             )
         }
     } catch (e: Exception) {
-        Log.e("EmpowerSWR", "Check-in info error for $depDate: ${e.message}")
-        return CheckInInfo("$prefix Error: ${e.message}", null, false, false)
+        Timber.tag("FlightsScreen").e("Check-in info error for %s",depDate)
+        return CheckInInfo("$prefix Error: ${e.message}", null, isOpen = false, isClosed = false)
     }
 }
 
@@ -234,12 +234,20 @@ private fun isDifferentDay(date1: String?, date2: String?): Boolean {
         }
         val d1 = inputFormat.parse(date1)
         val d2 = inputFormat.parse(date2)
-        val cal1 = Calendar.getInstance(TimeZone.getTimeZone("Pacific/Efate")).apply { time = d1 }
-        val cal2 = Calendar.getInstance(TimeZone.getTimeZone("Pacific/Efate")).apply { time = d2 }
+        val cal1 = Calendar.getInstance(TimeZone.getTimeZone("Pacific/Efate")).apply {
+            if (d1 != null) {
+                time = d1
+            }
+        }
+        val cal2 = Calendar.getInstance(TimeZone.getTimeZone("Pacific/Efate")).apply {
+            if (d2 != null) {
+                time = d2
+            }
+        }
         cal1.get(Calendar.YEAR) != cal2.get(Calendar.YEAR) ||
                 cal1.get(Calendar.DAY_OF_YEAR) != cal2.get(Calendar.DAY_OF_YEAR)
     } catch (e: Exception) {
-        Log.e("EmpowerSWR", "Date comparison error: ${e.message}")
+        Timber.tag("FlightsScreen").e(e,"Date comparison error")
         false
     }
 }
@@ -252,31 +260,38 @@ private fun isTodayDepDate(depDate: String?): Boolean {
             timeZone = TimeZone.getTimeZone("Pacific/Efate")
         }
         val dep = inputFormat.parse(depDate)
-        val calDep = Calendar.getInstance(TimeZone.getTimeZone("Pacific/Efate")).apply { time = dep }
+        val calDep = Calendar.getInstance(TimeZone.getTimeZone("Pacific/Efate")).apply {
+            if (dep != null) {
+                time = dep
+            }
+        }
         val calNow = Calendar.getInstance(TimeZone.getTimeZone("Pacific/Efate"))
         calDep.get(Calendar.YEAR) == calNow.get(Calendar.YEAR) &&
                 calDep.get(Calendar.DAY_OF_YEAR) == calNow.get(Calendar.DAY_OF_YEAR)
     } catch (e: Exception) {
-        Log.e("EmpowerSWR", "Today check error for $depDate: ${e.message}")
+        Timber.tag("FlightsScreen").e("Today check error for %s", depDate)
         false
     }
 }
 
 // Check if today is the PDB date
-private fun isTodayPdbDate(pdbDate: String?): Boolean {
-    if (pdbDate.isNullOrEmpty()) return false
+private fun isTodayPdbDate(dateString: String?): Boolean {
+    if (dateString.isNullOrEmpty()) return false
     return try {
         val inputFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply {
             timeZone = TimeZone.getTimeZone("Pacific/Efate")
         }
-        val date = inputFormat.parse(pdbDate)
+        val date = inputFormat.parse(dateString)
+        if (date == null) {
+            Timber.tag("FlightsScreen").w("Failed to parse date: %s", dateString)
+            return false
+        }
         val calDate = Calendar.getInstance(TimeZone.getTimeZone("Pacific/Efate")).apply { time = date }
         val calNow = Calendar.getInstance(TimeZone.getTimeZone("Pacific/Efate"))
-        Log.d("EmpowerSWR", "isTodayPdbDate: pdbDate=$pdbDate, calDate=${calDate.time}, calNow=${calNow.time}, isToday=${calDate.get(Calendar.YEAR) == calNow.get(Calendar.YEAR) && calDate.get(Calendar.DAY_OF_YEAR) == calNow.get(Calendar.DAY_OF_YEAR)}")
         calDate.get(Calendar.YEAR) == calNow.get(Calendar.YEAR) &&
                 calDate.get(Calendar.DAY_OF_YEAR) == calNow.get(Calendar.DAY_OF_YEAR)
     } catch (e: Exception) {
-        Log.e("EmpowerSWR", "Today check error for $pdbDate: ${e.message}")
+        Timber.tag("FlightsScreen").e(e, "Failed to check if today is PDB date for %s", dateString)
         false
     }
 }
@@ -288,44 +303,35 @@ private fun isValidPdbDate(pdbDate: String?): Boolean {
         val inputFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply {
             timeZone = TimeZone.getTimeZone("Pacific/Efate")
         }
-        val date = inputFormat.parse(pdbDate)
+        val date = inputFormat.parse(pdbDate) ?: return false
         val calDate = Calendar.getInstance(TimeZone.getTimeZone("Pacific/Efate")).apply { time = date }
         val calNow = Calendar.getInstance(TimeZone.getTimeZone("Pacific/Efate"))
-        Log.d("EmpowerSWR", "isValidPdbDate: pdbDate=$pdbDate, calDate=${calDate.time}, calNow=${calNow.time}, isValid=${calDate.get(Calendar.YEAR) > calNow.get(Calendar.YEAR) || (calDate.get(Calendar.YEAR) == calNow.get(Calendar.YEAR) && calDate.get(Calendar.DAY_OF_YEAR) >= calNow.get(Calendar.DAY_OF_YEAR))}")
         calDate.get(Calendar.YEAR) > calNow.get(Calendar.YEAR) ||
                 (calDate.get(Calendar.YEAR) == calNow.get(Calendar.YEAR) &&
                         calDate.get(Calendar.DAY_OF_YEAR) >= calNow.get(Calendar.DAY_OF_YEAR))
     } catch (e: Exception) {
-        Log.e("EmpowerSWR", "Valid PDB date check error for $pdbDate: ${e.message}")
+        Timber.tag("FlightsScreen").e(e, "Valid PDB date check error for %s", pdbDate)
         false
     }
 }
 
-// Check if airlines are different
-private fun isDifferentAirline(flightNo1: String?, flightNo2: String?): Boolean {
-    if (flightNo1.isNullOrEmpty() || flightNo2.isNullOrEmpty()) return false
-    return flightNo1.take(2) != flightNo2.take(2)
-}
-
-// Format for PDB internal dates (EEEE, dd-MMM, h:mm a)
 private fun formatPdbInternalDate(dateString: String?): String {
     if (dateString.isNullOrEmpty()) return "N/A"
     return try {
         val inputFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).apply {
             timeZone = TimeZone.getTimeZone("Pacific/Efate")
         }
-        val date = inputFormat.parse(dateString)
+        val date = inputFormat.parse(dateString) ?: return "N/A"
         val outputFormat = SimpleDateFormat("EEEE, dd-MMM, h:mm a", Locale.getDefault()).apply {
             timeZone = TimeZone.getTimeZone("Pacific/Efate")
         }
-        date?.let { outputFormat.format(it) } ?: "N/A"
+        outputFormat.format(date)
     } catch (e: Exception) {
-        Log.e("EmpowerSWR", "PDB internal date format error for $dateString: ${e.message}")
+        Timber.tag("FlightsScreen").e(e, "PDB internal date format error for %s", dateString)
         "N/A"
     }
 }
 
-// Check if internal PDB date is expired
 private fun isPdbInternalExpired(internalPdb: String?): Boolean {
     if (internalPdb.isNullOrEmpty()) return true
     return try {
@@ -335,16 +341,22 @@ private fun isPdbInternalExpired(internalPdb: String?): Boolean {
         }.apply {
             timeZone = TimeZone.getTimeZone("Pacific/Efate")
         }
-        val date = inputFormat.parse(internalPdb)
+        val date = inputFormat.parse(internalPdb) ?: return true
         val calDate = Calendar.getInstance(TimeZone.getTimeZone("Pacific/Efate")).apply { time = date }
         val calNow = Calendar.getInstance(TimeZone.getTimeZone("Pacific/Efate"))
-        Log.d("EmpowerSWR", "isPdbInternalExpired: internalPdb=$internalPdb, calDate=${calDate.time}, calNow=${calNow.time}, isExpired=${calNow.after(calDate)}")
         calNow.after(calDate)
     } catch (e: Exception) {
-        Log.e("EmpowerSWR", "Internal PDB expiration check error for $internalPdb: ${e.message}")
+        Timber.tag("FlightsScreen").e(e, "Internal PDB expiration check error for %s", internalPdb)
         true
     }
 }
+// Check if airlines are different
+private fun isDifferentAirline(flightNo1: String?, flightNo2: String?): Boolean {
+    if (flightNo1.isNullOrEmpty() || flightNo2.isNullOrEmpty()) return false
+    return flightNo1.take(2) != flightNo2.take(2)
+}
+
+
 
 // Determine PDB action based on date and time
 private fun getPdbAction(startDate: String?, endDate: String?): String {
@@ -353,7 +365,7 @@ private fun getPdbAction(startDate: String?, endDate: String?): String {
     return when {
         isTodayPdbDate(startDate) -> if (isMorning) "PDB1-am" else "PDB1-pm"
         isTodayPdbDate(endDate) -> if (isMorning) "PDB2-am" else "PDB2-pm"
-        else -> "Confirming at PDB" // Fallback
+        else -> "Mi stap lo PDB"
     }
 }
 
@@ -364,7 +376,6 @@ fun FlightsScreen(
     context: Context,
     navController: NavHostController
 ) {
-    Log.d("EmpowerSWR", "FlightsScreen composable called")
     val coroutineScope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -379,30 +390,79 @@ fun FlightsScreen(
     val isNetworkAvailable = remember { mutableStateOf(isNetworkAvailable(localContext)) }
     val isScreenActive = remember { mutableStateOf(true) }
     var lastNetworkErrorShown by remember { mutableStateOf(0L) }
+    // Permission launcher for location
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (!isGranted) {
+            coroutineScope.launch {
+                snackbarHostState.showSnackbar("Location permission is required to check in.")
+            }
+        }
+    }
+
+    // Reusable function to handle location access with permission checks
+    fun requestLocationAndPerformAction(
+        workerId: String,
+        action: String,
+        onSuccess: (Double, Double) -> Unit,
+        onFailure: (String) -> Unit
+    ) {
+        val permission = Manifest.permission.ACCESS_FINE_LOCATION
+        when {
+            ContextCompat.checkSelfPermission(
+                localContext,
+                permission
+            ) == PackageManager.PERMISSION_GRANTED -> {
+                val fusedLocationClient =
+                    LocationServices.getFusedLocationProviderClient(localContext)
+                try {
+                    fusedLocationClient.lastLocation.addOnSuccessListener { location ->
+                        if (location != null) {
+                            val lat = location.latitude
+                            val lng = location.longitude
+                            onSuccess(lat, lng)
+                        } else {
+                            Timber.tag("FlightsScreen").e( "Location is null for action %s",action)
+                            onFailure("Couldn't get your location. Try again.")
+                        }
+                    }.addOnFailureListener { e ->
+                        Timber.tag("FlightsScreen").e( "Location fetch failed for %s", action)
+                        onFailure("Couldn't get your location. Try again.")
+                    }
+                } catch (e: SecurityException) {
+                    Timber.tag("FlightsScreen").e( "SecurityException for %s",action)
+                    onFailure("Location permission error. Try again.")
+                }
+            }
+
+            else -> {
+                locationPermissionLauncher.launch(permission)
+            }
+        }
+    }
 
     // Monitor lifecycle events
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_START -> {
-                    Log.d("EmpowerSWR", "Lifecycle: ON_START - Screen active")
                     isScreenActive.value = true
                     isNetworkAvailable.value = isNetworkAvailable(localContext)
                 }
+
                 Lifecycle.Event.ON_STOP -> {
-                    Log.d("EmpowerSWR", "Lifecycle: ON_STOP - Screen likely went to sleep")
                     isScreenActive.value = false
                 }
+
                 Lifecycle.Event.ON_RESUME -> {
-                    Log.d("EmpowerSWR", "Lifecycle: ON_RESUME - Checking network")
                     isNetworkAvailable.value = isNetworkAvailable(localContext)
                     if (isNetworkAvailable.value && token != null && isScreenActive.value) {
                         val workerId = PrefsHelper.getWorkerId(localContext)
                         if (workerId != null) {
-                            Log.d("EmpowerSWR", "ON_RESUME: Refreshing data for workerId: $workerId")
                             viewModel.fetchFlightDetails(workerId) { error ->
                                 if (error != null) {
-                                    Log.e("EmpowerSWR", "Flight fetch error on resume: ${error.message}")
+                                    Timber.tag("FlightsScreen").e(error, "Flight fetch error on resume")
                                     flightError = error.message ?: "Failed to load flight details"
                                     if (System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
                                         coroutineScope.launch {
@@ -411,13 +471,12 @@ fun FlightsScreen(
                                         }
                                     }
                                 } else {
-                                    Log.d("EmpowerSWR", "No flight data available on resume")
                                     flightError = null
                                 }
                             }
                             viewModel.fetchPdbDetails(workerId) { error ->
                                 if (error != null && error.message != "No pre-departure details available") {
-                                    Log.e("EmpowerSWR", "PDB fetch error on resume: ${error.message}")
+                                    Timber.tag("FlightsScreen").e(error, "PDB fetch error on resume")
                                     pdbError = error.message ?: "Failed to load PDB details"
                                     if (System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
                                         coroutineScope.launch {
@@ -426,13 +485,13 @@ fun FlightsScreen(
                                         }
                                     }
                                 } else {
-                                    Log.d("EmpowerSWR", "No PDB data available on resume")
                                     pdbError = null
                                 }
                             }
                         }
                     }
                 }
+
                 else -> {}
             }
         }
@@ -447,27 +506,24 @@ fun FlightsScreen(
     LaunchedEffect(isScreenActive.value) {
         if (isScreenActive.value) {
             while (true) {
-                delay(60000) // Refresh every minute only when screen is active
+                delay(60000)
                 timerTrigger++
-                Log.d("EmpowerSWR", "Timer trigger incremented: $timerTrigger")
             }
         }
     }
 
     LaunchedEffect(token, timerTrigger) {
-        Log.d("EmpowerSWR", "Token: $token")
         if (token == null) {
-            Log.d("EmpowerSWR", "No token available, navigating to login")
+            Timber.i("No token available, navigating to login")
             navController.navigate("login") {
                 popUpTo(navController.graph.startDestinationId) { inclusive = true }
             }
         } else if (isNetworkAvailable.value && isScreenActive.value) {
             val workerId = PrefsHelper.getWorkerId(context)
             if (workerId != null) {
-                Log.d("EmpowerSWR", "Fetching flight and PDB details for workerId: $workerId")
                 viewModel.fetchFlightDetails(workerId) { error ->
                     if (error != null) {
-                        Log.e("EmpowerSWR", "Flight fetch error: ${error.message}")
+                        Timber.tag("FlightsScreen").e(error, "Flight fetch error")
                         flightError = error.message ?: "Failed to load flight details"
                         if (System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
                             coroutineScope.launch {
@@ -476,13 +532,12 @@ fun FlightsScreen(
                             }
                         }
                     } else {
-                        Log.d("EmpowerSWR", "No flight data available")
                         flightError = null
                     }
                 }
                 viewModel.fetchPdbDetails(workerId) { error ->
                     if (error != null && error.message != "No pre-departure details available") {
-                        Log.e("EmpowerSWR", "PDB fetch error: ${error.message}")
+                        Timber.tag("FlightsScreen").e(error, "PDB fetch error")
                         pdbError = error.message ?: "Failed to load PDB details"
                         if (System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
                             coroutineScope.launch {
@@ -491,18 +546,16 @@ fun FlightsScreen(
                             }
                         }
                     } else {
-                        Log.d("EmpowerSWR", "No PDB data available")
                         pdbError = null
                     }
                 }
             } else {
-                Log.e("EmpowerSWR", "No worker ID available")
+                Timber.tag("FlightsScreen").e("No worker ID available")
                 flightError = "No worker ID available"
                 pdbError = "No worker ID available"
-                // Removed snackbar for "No worker ID available"
             }
         } else if (!isNetworkAvailable.value) {
-            Log.w("EmpowerSWR", "No network, skipping data fetch")
+            Timber.w("No network, skipping data fetch")
             if (System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
                 coroutineScope.launch {
                     snackbarHostState.showSnackbar("Check your internet and try again")
@@ -510,7 +563,7 @@ fun FlightsScreen(
                 }
             }
         } else {
-            Log.w("EmpowerSWR", "Screen inactive, skipping data fetch")
+            Timber.w("Screen inactive, skipping data fetch")
         }
     }
 
@@ -523,25 +576,22 @@ fun FlightsScreen(
                         delay(2000)
                         val workerId = PrefsHelper.getWorkerId(context)
                         if (workerId != null) {
-                            Log.d("EmpowerSWR", "Refreshing flight and PDB details for workerId: $workerId")
                             var hasNetworkError = false
                             viewModel.fetchFlightDetails(workerId) { error ->
                                 if (error != null) {
-                                    Log.e("EmpowerSWR", "Flight refresh error: ${error.message}")
+                                    Timber.tag("FlightsScreen").e(error, "Flight refresh error")
                                     flightError = error.message ?: "Failed to refresh flight details"
                                     hasNetworkError = true
                                 } else {
-                                    Log.d("EmpowerSWR", "No flight data available on refresh")
                                     flightError = null
                                 }
                             }
                             viewModel.fetchPdbDetails(workerId) { error ->
                                 if (error != null && error.message != "No pre-departure details available") {
-                                    Log.e("EmpowerSWR", "PDB refresh error: ${error.message}")
+                                    Timber.tag("FlightsScreen").e(error, "PDB refresh error")
                                     pdbError = error.message ?: "Failed to refresh PDB details"
                                     hasNetworkError = true
                                 } else {
-                                    Log.d("EmpowerSWR", "No PDB data available on refresh")
                                     pdbError = null
                                 }
                             }
@@ -557,10 +607,9 @@ fun FlightsScreen(
                                 }
                             }
                         } else {
-                            Log.e("EmpowerSWR", "No worker ID available for refresh")
+                            Timber.tag("FlightsScreen").e("No worker ID available for refresh")
                             flightError = "No worker ID available"
                             pdbError = "No worker ID available"
-                            // Removed snackbar for "No worker ID available"
                         }
                     }
                     navController.currentBackStackEntry?.savedStateHandle?.remove<Boolean>("refresh_flights")
@@ -572,7 +621,7 @@ fun FlightsScreen(
                         }
                     }
                 } else if (!isScreenActive.value) {
-                    Log.d("EmpowerSWR", "Screen inactive, skipping refresh")
+                    Timber.w("Screen inactive, skipping refresh")
                 }
             }
     }
@@ -583,47 +632,68 @@ fun FlightsScreen(
         PullToRefreshBox(
             isRefreshing = isRefreshing,
             onRefresh = {
-                Log.d("EmpowerSWR", "Swipe-to-refresh triggered")
                 coroutineScope.launch {
                     isRefreshing = true
                     try {
                         val workerId = PrefsHelper.getWorkerId(context)
                         if (workerId != null && isNetworkAvailable.value && isScreenActive.value) {
-                            Log.d("EmpowerSWR", "Refresh workerId: $workerId")
                             var hasNetworkError = false
-                            viewModel.fetchFlightDetails(workerId) { error ->
-                                if (error != null) {
-                                    Log.e("EmpowerSWR", "Flight refresh error: ${error.message}")
-                                    flightError = error.message ?: "Failed to refresh flight details"
-                                    hasNetworkError = true
-                                } else {
-                                    Log.d("EmpowerSWR", "No flight data available on refresh")
-                                    flightError = null
+
+                            // Wrap flight details fetch in a timeout
+                            withTimeoutOrNull(10000L) {
+                                var fetchCompleted = false
+                                viewModel.fetchFlightDetails(workerId) { error ->
+                                    fetchCompleted = true
+                                    if (error != null) {
+                                        Timber.tag("FlightsScreen").e(error, "Flight refresh error")
+                                        flightError = error.message ?: "Failed to refresh flight details"
+                                        hasNetworkError = true
+                                    } else {
+                                        flightError = null
+                                    }
                                 }
-                            }
-                            viewModel.fetchPdbDetails(workerId) { error ->
-                                if (error != null && error.message != "No pre-departure details available") {
-                                    Log.e("EmpowerSWR", "PDB refresh error: ${error.message}")
-                                    pdbError = error.message ?: "Failed to refresh PDB details"
-                                    hasNetworkError = true
-                                } else {
-                                    Log.d("EmpowerSWR", "No PDB data available on refresh")
-                                    pdbError = null
+                                // Wait for callback to complete
+                                while (!fetchCompleted) {
+                                    delay(100)
                                 }
+                            } ?: run {
+                                Timber.tag("FlightsScreen").e("Flight details fetch timed out")
+                                flightError = "Flight details fetch timed out"
+                                hasNetworkError = true
                             }
-                            delay(1000)
+
+                            // Wrap PDB details fetch in a timeout
+                            withTimeoutOrNull(10000L) {
+                                var fetchCompleted = false
+                                viewModel.fetchPdbDetails(workerId) { error ->
+                                    fetchCompleted = true
+                                    if (error != null && error.message != "No pre-departure details available") {
+                                        Timber.tag("FlightsScreen").e(error, "PDB refresh error")
+                                        pdbError = error.message ?: "Failed to refresh PDB details"
+                                        hasNetworkError = true
+                                    } else {
+                                        pdbError = null
+                                    }
+                                }
+                                // Wait for callback to complete
+                                while (!fetchCompleted) {
+                                    delay(100)
+                                }
+                            } ?: run {
+                                Timber.tag("FlightsScreen").e("PDB details fetch timed out")
+                                pdbError = "PDB details fetch timed out"
+                                hasNetworkError = true
+                            }
+
+                            // Show snackbar based on result
                             if (hasNetworkError && System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
-                                coroutineScope.launch {
-                                    snackbarHostState.showSnackbar("Check your internet and try again")
-                                    lastNetworkErrorShown = System.currentTimeMillis()
-                                }
+                                snackbarHostState.showSnackbar("Check your internet and try again")
+                                lastNetworkErrorShown = System.currentTimeMillis()
                             } else if (!hasNetworkError) {
-                                coroutineScope.launch {
-                                    snackbarHostState.showSnackbar("All caught up!")
-                                }
+                                snackbarHostState.showSnackbar("All caught up!")
                             }
                         } else {
-                            Log.e("EmpowerSWR", "No worker ID, no network, or screen inactive for refresh")
+                            Timber.tag("FlightsScreen").i("No worker ID, no network, or screen inactive for refresh")
                             flightError = when {
                                 !isNetworkAvailable.value -> "No network connection"
                                 !isScreenActive.value -> "Screen inactive"
@@ -635,21 +705,17 @@ fun FlightsScreen(
                                 else -> "No worker ID available"
                             }
                             if (!isNetworkAvailable.value && System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
-                                coroutineScope.launch {
-                                    snackbarHostState.showSnackbar("Check your internet and try again")
-                                    lastNetworkErrorShown = System.currentTimeMillis()
-                                }
-                            }
-                        }
-                    } catch (e: Exception) {
-                        Log.e("EmpowerSWR", "Refresh error: ${e.message}")
-                        flightError = "Refresh failed: ${e.message}"
-                        pdbError = "Refresh failed: ${e.message}"
-                        if (System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
-                            coroutineScope.launch {
                                 snackbarHostState.showSnackbar("Check your internet and try again")
                                 lastNetworkErrorShown = System.currentTimeMillis()
                             }
+                        }
+                    } catch (e: Exception) {
+                        Timber.tag("FlightsScreen").e(e, "Unexpected refresh error")
+                        flightError = "Refresh failed: ${e.message}"
+                        pdbError = "Refresh failed: ${e.message}"
+                        if (System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
+                            snackbarHostState.showSnackbar("Check your internet and try again")
+                            lastNetworkErrorShown = System.currentTimeMillis()
                         }
                     } finally {
                         isRefreshing = false
@@ -657,8 +723,8 @@ fun FlightsScreen(
                 }
             },
             modifier = Modifier.fillMaxSize()
-        ) {
-            Column(
+        )
+        { Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(padding)
@@ -677,12 +743,11 @@ fun FlightsScreen(
 
                 // Pre-Departure Details Card
                 pdbDetails?.let { details ->
-                    Log.d("EmpowerSWR", "PDB Details: $details")
                     val isInternalPdbExpired = isPdbInternalExpired(details.internalPdb)
                     val hasValidPdb = (details.startDate != null || details.endDate != null) &&
                             (isValidPdbDate(details.startDate) || isValidPdbDate(details.endDate))
                     val hasValidInternalPdb = details.internalPdb != null && !isInternalPdbExpired
-                    Log.d("EmpowerSWR", "PDB: scheme=${details.schemes}, hasValidPdb=$hasValidPdb, hasValidInternalPdb=$hasValidInternalPdb")
+
                     if (hasValidPdb || hasValidInternalPdb) {
                         Card(
                             modifier = Modifier
@@ -734,28 +799,36 @@ fun FlightsScreen(
                                         ) {
                                             Text(
                                                 text = "Pre Departure",
-                                                style = MaterialTheme.typography.titleMedium.copy(fontSize = 18.sp),
+                                                style = MaterialTheme.typography.titleMedium.copy(
+                                                    fontSize = 18.sp
+                                                ),
                                                 color = MaterialTheme.colorScheme.onSurface,
                                                 fontWeight = FontWeight.SemiBold
                                             )
                                             Spacer(modifier = Modifier.height(8.dp))
                                             Text(
                                                 text = formatPdbDate(details.startDate),
-                                                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
+                                                style = MaterialTheme.typography.bodyLarge.copy(
+                                                    fontSize = 16.sp
+                                                ),
                                                 color = MaterialTheme.colorScheme.onSurface
                                             )
                                             if (details.schemes == "PALM" && details.endDate != null) {
                                                 Spacer(modifier = Modifier.height(8.dp))
                                                 Text(
                                                     text = formatPdbDate(details.endDate),
-                                                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
+                                                    style = MaterialTheme.typography.bodyLarge.copy(
+                                                        fontSize = 16.sp
+                                                    ),
                                                     color = MaterialTheme.colorScheme.onSurface
                                                 )
                                             }
                                             Spacer(modifier = Modifier.height(8.dp))
                                             Text(
                                                 text = details.pdbLocationLong ?: "N/A",
-                                                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
+                                                style = MaterialTheme.typography.bodyLarge.copy(
+                                                    fontSize = 16.sp
+                                                ),
                                                 color = MaterialTheme.colorScheme.onSurface
                                             )
                                             Spacer(modifier = Modifier.height(12.dp))
@@ -767,25 +840,29 @@ fun FlightsScreen(
                                                     onClick = {
                                                         val lat = details.pdbLat
                                                         val lng = details.pdbLong
-                                                        Log.d("EmpowerSWR", "Opening Maps with pdbLat: $lat, pdbLong: $lng")
+
                                                         if (lat != null && lng != null) {
-                                                            val label = details.pdbLocationLong ?: "PDB Location"
-                                                            val uri = Uri.parse("geo:$lat,$lng?q=$lat,$lng($label)&z=15")
-                                                            val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+                                                            val label = details.pdbLocationLong
+                                                                ?: "PDB Location"
+                                                            val uri =
+                                                                "geo:$lat,$lng?q=$lat,$lng($label)&z=15".toUri()
+                                                            val intent = Intent(
+                                                                Intent.ACTION_VIEW,
+                                                                uri
+                                                            ).apply {
                                                                 setPackage("com.google.android.apps.maps")
                                                             }
                                                             try {
                                                                 localContext.startActivity(intent)
                                                             } catch (e: Exception) {
-                                                                Log.e("EmpowerSWR", "Map open error: ${e.message}")
-                                                                // Removed snackbar for "Failed to open Maps"
+                                                                Timber.tag("FlightsScreen").e(e,"Map open error")
                                                             }
                                                         } else {
-                                                            Log.e("EmpowerSWR", "No location coordinates available")
-                                                            // Removed snackbar for "No location coordinates available"
+                                                            Timber.tag("FlightsScreen").e("No location coordinates available")
                                                         }
                                                     },
-                                                    modifier = Modifier.weight(1f).padding(end = 8.dp),
+                                                    modifier = Modifier.weight(1f)
+                                                        .padding(end = 8.dp),
                                                     shape = RoundedCornerShape(12.dp)
                                                 ) {
                                                     Icon(
@@ -796,44 +873,58 @@ fun FlightsScreen(
                                                     Spacer(modifier = Modifier.width(8.dp))
                                                     Text("Open in Maps")
                                                 }
-                                                if (isTodayPdbDate(details.startDate) || isTodayPdbDate(details.endDate)) {
+                                                if (isTodayPdbDate(details.startDate) || isTodayPdbDate(
+                                                        details.endDate,)) {
                                                     Button(
                                                         onClick = {
-                                                            val workerId = PrefsHelper.getWorkerId(localContext)
-                                                            Log.d("EmpowerSWR", "Confirming at PDB clicked, workerId: $workerId")
+                                                            val workerId =
+                                                                PrefsHelper.getWorkerId(localContext)
                                                             if (workerId == null) {
-                                                                Log.e("EmpowerSWR", "No worker ID available for PDB confirmation")
-                                                                // Removed snackbar for "No worker ID available"
+                                                                Timber.tag("FlightsScreen").e("No worker ID available for PDB confirmation")
+                                                                coroutineScope.launch {
+                                                                    snackbarHostState.showSnackbar("No worker ID available.")
+                                                                }
                                                                 return@Button
                                                             }
-                                                            val action = getPdbAction(details.startDate, details.endDate)
-                                                            val fusedLocationClient = LocationServices.getFusedLocationProviderClient(localContext)
-                                                            fusedLocationClient.lastLocation.addOnSuccessListener { location ->
-                                                                if (location != null) {
-                                                                    val lat = location.latitude
-                                                                    val lng = location.longitude
-                                                                    viewModel.saveLocation(workerId, lat, lng, action)
-                                                                    Log.d("EmpowerSWR", "Location saved: lat=$lat, lng=$lng, action=$action")
+                                                            val action = getPdbAction(
+                                                                details.startDate,
+                                                                details.endDate
+                                                            )
+                                                            requestLocationAndPerformAction(
+                                                                workerId = workerId,
+                                                                action = action,
+                                                                onSuccess = { lat, lng ->
+                                                                    viewModel.saveLocation(
+                                                                        workerId,
+                                                                        lat,
+                                                                        lng,
+                                                                        action
+                                                                    )
                                                                     coroutineScope.launch {
-                                                                        snackbarHostState.showSnackbar("You're checked in at PDB!")
+                                                                        snackbarHostState.showSnackbar(
+                                                                            "You're checked in at PDB!"
+                                                                        )
                                                                     }
-                                                                } else {
-                                                                    Log.e("EmpowerSWR", "Unable to get location for Confirming at PDB")
+                                                                },
+                                                                onFailure = { message ->
                                                                     coroutineScope.launch {
-                                                                        snackbarHostState.showSnackbar("Couldn't get your location. Try again")
+                                                                        snackbarHostState.showSnackbar(
+                                                                            message
+                                                                        )
                                                                     }
                                                                 }
-                                                            }.addOnFailureListener { e ->
-                                                                Log.e("EmpowerSWR", "Location fetch failed for Confirming at PDB: ${e.message}")
-                                                                coroutineScope.launch {
-                                                                    snackbarHostState.showSnackbar("Couldn't get your location. Try again")
-                                                                }
-                                                            }
+                                                            )
                                                         },
                                                         modifier = Modifier.weight(1f),
                                                         shape = RoundedCornerShape(12.dp)
                                                     ) {
-                                                        Text("Confirming at PDB")
+                                                        Icon(
+                                                            imageVector = Icons.Default.ThumbUp,
+                                                            contentDescription = null,
+                                                            tint = MaterialTheme.colorScheme.onPrimary
+                                                        )
+                                                        Spacer(modifier = Modifier.width(8.dp))
+                                                        Text("Mi stap lo PDB")
                                                     }
                                                 }
                                             }
@@ -841,15 +932,16 @@ fun FlightsScreen(
                                                 Spacer(modifier = Modifier.height(12.dp))
                                                 Button(
                                                     onClick = {
-                                                        val workerId = PrefsHelper.getWorkerId(localContext)
-                                                        Log.d("EmpowerSWR", "Confirm PDB Status clicked, workerId: $workerId")
+                                                        val workerId =
+                                                            PrefsHelper.getWorkerId(localContext)
                                                         if (workerId == null) {
-                                                            Log.e("EmpowerSWR", "No worker ID available for PDB status update")
-                                                            // Removed snackbar for "No worker ID available"
+                                                            Timber.tag("FlightsScreen").e("No worker ID available for PDB status update")
+                                                            coroutineScope.launch {
+                                                                snackbarHostState.showSnackbar("No worker ID available.")
+                                                            }
                                                             return@Button
                                                         }
                                                         viewModel.updatePdbStatus(workerId) { success, message ->
-                                                            Log.d("EmpowerSWR", "PDB status update result: success=$success, message=$message")
                                                             coroutineScope.launch {
                                                                 if (success) {
                                                                     snackbarHostState.showSnackbar("Great! Your PDB is confirmed!")
@@ -890,36 +982,44 @@ fun FlightsScreen(
                                             modifier = Modifier.padding(12.dp)
                                         ) {
                                             Text(
-                                                text = "Internal PDB",
-                                                style = MaterialTheme.typography.titleMedium.copy(fontSize = 18.sp),
+                                                text = "Internal PDB (at our office)",
+                                                style = MaterialTheme.typography.titleMedium.copy(
+                                                    fontSize = 18.sp
+                                                ),
                                                 color = MaterialTheme.colorScheme.onSurface,
                                                 fontWeight = FontWeight.SemiBold
                                             )
                                             Spacer(modifier = Modifier.height(8.dp))
                                             Text(
                                                 text = formatPdbInternalDate(details.internalPdb),
-                                                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
+                                                style = MaterialTheme.typography.bodyLarge.copy(
+                                                    fontSize = 16.sp
+                                                ),
                                                 color = MaterialTheme.colorScheme.onSurface
                                             )
                                             Spacer(modifier = Modifier.height(8.dp))
                                             Text(
                                                 text = "Internal PDB Status: ${details.internalPdbStatus ?: "N/A"}",
-                                                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
+                                                style = MaterialTheme.typography.bodyLarge.copy(
+                                                    fontSize = 16.sp
+                                                ),
                                                 color = MaterialTheme.colorScheme.onSurface
                                             )
                                             if (details.internalPdbStatus == "Unaware" || details.internalPdbStatus == "Messaged") {
                                                 Spacer(modifier = Modifier.height(8.dp))
                                                 Button(
                                                     onClick = {
-                                                        val workerId = PrefsHelper.getWorkerId(localContext)
-                                                        Log.d("EmpowerSWR", "Confirm Internal PDB Status clicked, workerId: $workerId")
+                                                        val workerId =
+                                                            PrefsHelper.getWorkerId(localContext)
                                                         if (workerId == null) {
-                                                            Log.e("EmpowerSWR", "No worker ID available for Internal PDB status update")
-                                                            // Removed snackbar for "No worker ID available"
+                                                            Timber.tag("FlightsScreen").e("No worker ID available for Internal PDB status update")
+                                                            coroutineScope.launch {
+                                                                snackbarHostState.showSnackbar("No worker ID available.")
+                                                            }
                                                             return@Button
                                                         }
                                                         viewModel.updatePdbInternalStatus(workerId) { success, message ->
-                                                            Log.d("EmpowerSWR", "Internal PDB status update result: success=$success, message=$message")
+                                                            Timber.i("Internal PDB status update result: success=%b, message=%s", success, message)
                                                             coroutineScope.launch {
                                                                 if (success) {
                                                                     snackbarHostState.showSnackbar("Awesome! Internal PDB confirmed!")
@@ -933,7 +1033,7 @@ fun FlightsScreen(
                                                     shape = RoundedCornerShape(12.dp)
                                                 ) {
                                                     Icon(
-                                                        imageVector = Icons.Default.Check,
+                                                        imageVector = Icons.Default.ThumbUp,
                                                         contentDescription = null,
                                                         tint = MaterialTheme.colorScheme.onPrimary
                                                     )
@@ -947,7 +1047,7 @@ fun FlightsScreen(
                             }
                         }
                     } else {
-                        Log.d("EmpowerSWR", "PDB expired or invalid: startDate=${details.startDate}, endDate=${details.endDate}, internalPdb=${details.internalPdb}")
+                        Timber.i("PDB expired or invalid")
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -981,31 +1081,34 @@ fun FlightsScreen(
                                     onClick = {
                                         val workerId = PrefsHelper.getWorkerId(localContext)
                                         if (workerId != null && token != null && isNetworkAvailable.value && isScreenActive.value) {
-                                            Log.d("EmpowerSWR", "Retry fetching PDB details for workerId: $workerId")
+
                                             viewModel.fetchPdbDetails(workerId) { error ->
                                                 if (error != null && error.message != "No pre-departure details available") {
-                                                    Log.e("EmpowerSWR", "Retry PDB fetch error: ${error.message}")
+
                                                     if (System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
                                                         coroutineScope.launch {
                                                             snackbarHostState.showSnackbar("Check your internet and try again")
-                                                            lastNetworkErrorShown = System.currentTimeMillis()
+                                                            lastNetworkErrorShown =
+                                                                System.currentTimeMillis()
                                                         }
                                                     }
                                                 } else {
-                                                    Log.d("EmpowerSWR", "No PDB data available on retry")
                                                     pdbError = null
                                                 }
                                             }
                                         } else {
-                                            Log.e("EmpowerSWR", "No worker ID, token, network, or screen inactive for retry")
+                                            Timber.tag("FlightsScreen").e("No worker ID, token, network, or screen inactive for retry")
                                             if (!isNetworkAvailable.value && System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
                                                 coroutineScope.launch {
                                                     snackbarHostState.showSnackbar("Check your internet and try again")
-                                                    lastNetworkErrorShown = System.currentTimeMillis()
+                                                    lastNetworkErrorShown =
+                                                        System.currentTimeMillis()
                                                 }
                                             } else if (token == null) {
                                                 navController.navigate("login") {
-                                                    popUpTo(navController.graph.startDestinationId) { inclusive = true }
+                                                    popUpTo(navController.graph.startDestinationId) {
+                                                        inclusive = true
+                                                    }
                                                     launchSingleTop = true
                                                 }
                                             }
@@ -1061,31 +1164,35 @@ fun FlightsScreen(
                                     onClick = {
                                         val workerId = PrefsHelper.getWorkerId(localContext)
                                         if (workerId != null && token != null && isNetworkAvailable.value && isScreenActive.value) {
-                                            Log.d("EmpowerSWR", "Retry fetching PDB details for workerId: $workerId")
+
                                             viewModel.fetchPdbDetails(workerId) { error ->
                                                 if (error != null && error.message != "No pre-departure details available") {
-                                                    Log.e("EmpowerSWR", "Retry PDB fetch error: ${error.message}")
+
                                                     if (System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
                                                         coroutineScope.launch {
                                                             snackbarHostState.showSnackbar("Check your internet and try again")
-                                                            lastNetworkErrorShown = System.currentTimeMillis()
+                                                            lastNetworkErrorShown =
+                                                                System.currentTimeMillis()
                                                         }
                                                     }
                                                 } else {
-                                                    Log.d("EmpowerSWR", "No PDB data available on retry")
+
                                                     pdbError = null
                                                 }
                                             }
                                         } else {
-                                            Log.e("EmpowerSWR", "No worker ID, token, network, or screen inactive for retry")
+                                            Timber.tag("FlightsScreen").e("No worker ID, token, network, or screen inactive for retry")
                                             if (!isNetworkAvailable.value && System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
                                                 coroutineScope.launch {
                                                     snackbarHostState.showSnackbar("Check your internet and try again")
-                                                    lastNetworkErrorShown = System.currentTimeMillis()
+                                                    lastNetworkErrorShown =
+                                                        System.currentTimeMillis()
                                                 }
                                             } else if (token == null) {
                                                 navController.navigate("login") {
-                                                    popUpTo(navController.graph.startDestinationId) { inclusive = true }
+                                                    popUpTo(navController.graph.startDestinationId) {
+                                                        inclusive = true
+                                                    }
                                                     launchSingleTop = true
                                                 }
                                             }
@@ -1101,9 +1208,8 @@ fun FlightsScreen(
                     }
                 }
 
-                // Flight Details Card
+                // Updated Flight Details Card
                 flightDetails?.let { details ->
-                    Log.d("EmpowerSWR", "Flight Details: $details")
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1141,20 +1247,20 @@ fun FlightsScreen(
                             if (details.flightStatus == "Unaware" || details.flightStatus == "Messaged") {
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Row(
-                                    modifier = Modifier.fillMaxWidth(0.5f),
+                                    modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.Center
                                 ) {
                                     Button(
                                         onClick = {
                                             val workerId = PrefsHelper.getWorkerId(localContext)
-                                            Log.d("EmpowerSWR", "Confirm Flight Status clicked, workerId: $workerId, token: ${token ?: "null"}")
                                             if (workerId == null) {
-                                                Log.e("EmpowerSWR", "No worker ID available for flight status update")
-                                                // Removed snackbar for "No worker ID available"
+                                                Timber.tag("FlightsScreen").e("No worker ID available for flight status update")
+                                                coroutineScope.launch {
+                                                    snackbarHostState.showSnackbar("No worker ID available.")
+                                                }
                                                 return@Button
                                             }
                                             viewModel.updateFlightStatus(workerId) { success, message ->
-                                                Log.d("EmpowerSWR", "Flight status update result: success=$success, message=$message")
                                                 coroutineScope.launch {
                                                     if (success) {
                                                         snackbarHostState.showSnackbar("Flight confirmed! Ready to go!")
@@ -1173,7 +1279,7 @@ fun FlightsScreen(
                                             tint = MaterialTheme.colorScheme.onPrimary
                                         )
                                         Spacer(modifier = Modifier.width(8.dp))
-                                        Text("Confirm Flight Status")
+                                        Text("Tankyu tumas!  Mi save nao.")
                                     }
                                 }
                             }
@@ -1184,14 +1290,15 @@ fun FlightsScreen(
                                     fontSize = 16.sp,
                                     fontWeight = FontWeight.Bold
                                 ),
-                                color = MaterialTheme.colorScheme.primary
+                                color = MaterialTheme.colorScheme.primary,
+                                textAlign = TextAlign.Center // Centered text
                             )
                             Spacer(modifier = Modifier.height(8.dp))
-
                             Text(
                                 text = "Flight Status: ${details.flightStatus ?: "No flight yet"}",
                                 style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
-                                color = MaterialTheme.colorScheme.onSurface
+                                color = MaterialTheme.colorScheme.onSurface,
+                                textAlign = TextAlign.Center // Centered text
                             )
                             Spacer(modifier = Modifier.height(12.dp))
                             HorizontalDivider(
@@ -1201,7 +1308,7 @@ fun FlightsScreen(
                             Spacer(modifier = Modifier.height(12.dp))
 
                             // First Leg (International)
-                            if (!details.intFlightNo.isNullOrEmpty() || !details.intDepDate.isNullOrEmpty()) {
+                            if (!details.intFlightNo.isNullOrEmpty() && !details.intDepDate.isNullOrEmpty()) {
                                 Card(
                                     modifier = Modifier.fillMaxWidth(),
                                     elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
@@ -1217,38 +1324,63 @@ fun FlightsScreen(
                                     ) {
                                         Text(
                                             text = formatSubcardTitle(details.intDepDate),
-                                            style = MaterialTheme.typography.titleLarge.copy(fontSize = 18.sp),
+                                            style = MaterialTheme.typography.titleLarge.copy(
+                                                fontSize = 18.sp
+                                            ),
                                             fontWeight = FontWeight.SemiBold,
-                                            color = MaterialTheme.colorScheme.onSurface
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            textAlign = TextAlign.Center // Centered text
                                         )
                                         Spacer(modifier = Modifier.height(8.dp))
                                         Text(
-                                            text = getCheckInInfo(details.intDepDate, 2.5, true).statusText,
-                                            style = MaterialTheme.typography.titleLarge.copy(fontSize = 18.sp),
+                                            text = getCheckInInfo(
+                                                details.intDepDate,
+                                                2.5,
+                                                true
+                                            ).statusText,
+                                            style = MaterialTheme.typography.titleLarge.copy(
+                                                fontSize = 18.sp
+                                            ),
                                             fontWeight = FontWeight.Bold,
-                                            color = Color.Red
+                                            color = Color.Red,
+                                            textAlign = TextAlign.Center // Centered text
                                         )
                                         Spacer(modifier = Modifier.height(8.dp))
                                         Text(
-                                            text = getCheckInInfo(details.intDepDate, 2.5, true).countdownText ?: "",
-                                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-                                            color = MaterialTheme.colorScheme.onSurface
+                                            text = getCheckInInfo(
+                                                details.intDepDate,
+                                                2.5,
+                                                true
+                                            ).countdownText ?: "",
+                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                fontSize = 14.sp
+                                            ),
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            textAlign = TextAlign.Center // Centered text
                                         )
                                         Spacer(modifier = Modifier.height(8.dp))
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.Center, // Center the row content
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
                                             AsyncImage(
-                                                model = details.intFlightNo?.take(2)?.let { "https://db.nougro.com/images/airlines/$it.png" },
-                                                contentDescription = "Airline Logo",
+                                                model = details.intFlightNo.take(2)
+                                                    .let { "https://db.nougro.com/images/airlines/$it.png" },
+                                                contentDescription = "Airline logo",
                                                 modifier = Modifier.size(48.dp),
                                                 placeholder = painterResource(id = android.R.drawable.ic_menu_gallery),
                                                 error = painterResource(id = android.R.drawable.ic_menu_close_clear_cancel)
                                             )
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Text(
-                                                text = "${details.intFlightNo ?: "N/A"} to ${details.intDest ?: "N/A"}",
-                                                style = MaterialTheme.typography.titleLarge.copy(fontSize = 18.sp),
+                                                text = "${details.intFlightNo} to ${details.intDest ?: "N/A"}",
+                                                style = MaterialTheme.typography.titleLarge.copy(
+                                                    fontSize = 18.sp
+                                                ),
                                                 fontWeight = FontWeight.Bold,
-                                                color = MaterialTheme.colorScheme.primary
+                                                color = MaterialTheme.colorScheme.primary,
+                                                textAlign = TextAlign.Center // Centered text
                                             )
                                         }
                                         Spacer(modifier = Modifier.height(8.dp))
@@ -1259,7 +1391,10 @@ fun FlightsScreen(
                                         ) {
                                             Text(
                                                 text = formatTime(details.intDepDate),
-                                                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp)
+                                                style = MaterialTheme.typography.bodyMedium.copy(
+                                                    fontSize = 14.sp
+                                                ),
+                                                textAlign = TextAlign.Center // Centered text
                                             )
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Icon(
@@ -1270,44 +1405,56 @@ fun FlightsScreen(
                                             )
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Text(
-                                                text = formatArrivalTime(details.intArrDate, details.intDepDate),
-                                                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp)
+                                                text = formatArrivalTime(
+                                                    details.intArrDate,
+                                                    details.intDepDate
+                                                ),
+                                                style = MaterialTheme.typography.bodyMedium.copy(
+                                                    fontSize = 14.sp
+                                                ),
+                                                textAlign = TextAlign.Center // Centered text
                                             )
                                         }
-                                        if (isTodayDepDate(details.intDepDate) && getCheckInInfo(details.intDepDate, 2.5, true).isOpen) {
+                                        if (isTodayDepDate(details.intDepDate) && getCheckInInfo(
+                                                details.intDepDate,
+                                                2.5,
+                                                true
+                                            ).isOpen
+                                        ) {
                                             Spacer(modifier = Modifier.height(12.dp))
                                             Button(
                                                 onClick = {
-                                                    val workerId = PrefsHelper.getWorkerId(localContext)
-                                                    Log.d("EmpowerSWR", "Checked In clicked, workerId: $workerId")
+                                                    val workerId =
+                                                        PrefsHelper.getWorkerId(localContext)
                                                     if (workerId == null) {
-                                                        Log.e("EmpowerSWR", "No worker ID available for check-in")
-                                                        // Removed snackbar for "No worker ID available"
+                                                        Timber.tag("FlightsScreen").e("No worker ID available for check-in")
+                                                        coroutineScope.launch {
+                                                            snackbarHostState.showSnackbar("No worker ID available.")
+                                                        }
                                                         return@Button
                                                     }
-                                                    val fusedLocationClient = LocationServices.getFusedLocationProviderClient(localContext)
-                                                    fusedLocationClient.lastLocation.addOnSuccessListener { location ->
-                                                        if (location != null) {
-                                                            val lat = location.latitude
-                                                            val lng = location.longitude
-                                                            val action = "Checked In"
-                                                            viewModel.saveLocation(workerId, lat, lng, action)
-                                                            Log.d("EmpowerSWR", "Location saved: lat=$lat, lng=$lng, action=$action")
+                                                    requestLocationAndPerformAction(
+                                                        workerId = workerId,
+                                                        action = "Checked In",
+                                                        onSuccess = { lat, lng ->
+                                                            viewModel.saveLocation(
+                                                                workerId,
+                                                                lat,
+                                                                lng,
+                                                                "Checked In"
+                                                            )
                                                             coroutineScope.launch {
                                                                 snackbarHostState.showSnackbar("You're checked in!")
                                                             }
-                                                        } else {
-                                                            Log.e("EmpowerSWR", "Unable to get location for Checked In")
+                                                        },
+                                                        onFailure = { message ->
                                                             coroutineScope.launch {
-                                                                snackbarHostState.showSnackbar("Couldn't get your location. Try again")
+                                                                snackbarHostState.showSnackbar(
+                                                                    message
+                                                                )
                                                             }
                                                         }
-                                                    }.addOnFailureListener { e ->
-                                                        Log.e("EmpowerSWR", "Location fetch failed for Checked In: ${e.message}")
-                                                        coroutineScope.launch {
-                                                            snackbarHostState.showSnackbar("Couldn't get your location. Try again")
-                                                        }
-                                                    }
+                                                    )
                                                 },
                                                 modifier = Modifier.fillMaxWidth(0.5f),
                                                 shape = RoundedCornerShape(12.dp)
@@ -1319,18 +1466,24 @@ fun FlightsScreen(
                                 }
                             }
 
+                            // Add padding after international leg
+                            if (!details.intFlightNo.isNullOrEmpty() && !details.intDepDate.isNullOrEmpty()) {
+                                Spacer(modifier = Modifier.height(16.dp)) // Increased padding before domestic leg
+                            }
+
                             if (details.hotel1 != null && details.hotel1.isNotBlank()) {
                                 Spacer(modifier = Modifier.height(12.dp))
                                 Text(
                                     text = details.hotel1,
                                     style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-                                    color = MaterialTheme.colorScheme.secondary
+                                    color = MaterialTheme.colorScheme.secondary,
+                                    textAlign = TextAlign.Center // Centered text
                                 )
                             }
 
                             // Second Leg (Domestic)
-                            if (!details.domFlightNo.isNullOrBlank() && !details.domDepDate.isNullOrBlank()) {
-                                Spacer(modifier = Modifier.height(12.dp))
+                            if (!details.domFlightNo.isNullOrEmpty() && !details.domDepDate.isNullOrEmpty() && !details.domDest.isNullOrEmpty()) {
+                                Spacer(modifier = Modifier.height(12.dp)) // Padding between subcards
                                 Card(
                                     modifier = Modifier.fillMaxWidth(),
                                     elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
@@ -1341,46 +1494,77 @@ fun FlightsScreen(
                                     )
                                 ) {
                                     Column(
-                                        modifier = Modifier.padding(12.dp)
+                                        modifier = Modifier.padding(12.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally // Center content
                                     ) {
                                         Text(
                                             text = formatSubcardTitle(details.domDepDate),
-                                            style = MaterialTheme.typography.titleLarge.copy(fontSize = 18.sp),
+                                            style = MaterialTheme.typography.titleLarge.copy(
+                                                fontSize = 18.sp
+                                            ),
                                             fontWeight = FontWeight.SemiBold,
-                                            color = MaterialTheme.colorScheme.onSurface
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            textAlign = TextAlign.Center // Centered text
                                         )
                                         Spacer(modifier = Modifier.height(8.dp))
-                                        if (isDifferentDay(details.intDepDate, details.domDepDate) ||
-                                            isDifferentAirline(details.intFlightNo, details.domFlightNo)
+                                        if ((details.intDepDate.isNullOrEmpty() || details.domDepDate.isNullOrEmpty() || isDifferentDay(
+                                                details.intDepDate,
+                                                details.domDepDate
+                                            )) ||
+                                            (details.intFlightNo.isNullOrEmpty() || details.domFlightNo.isNullOrEmpty() || isDifferentAirline(
+                                                details.intFlightNo,
+                                                details.domFlightNo
+                                            ))
                                         ) {
                                             Text(
-                                                text = getCheckInInfo(details.domDepDate, 1.0, false).statusText,
-                                                style = MaterialTheme.typography.titleLarge.copy(fontSize = 18.sp),
+                                                text = getCheckInInfo(
+                                                    details.domDepDate,
+                                                    1.0,
+                                                    false
+                                                ).statusText,
+                                                style = MaterialTheme.typography.titleLarge.copy(
+                                                    fontSize = 18.sp
+                                                ),
                                                 fontWeight = FontWeight.Bold,
-                                                color = Color.Red
+                                                color = Color.Red,
+                                                textAlign = TextAlign.Center // Centered text
                                             )
                                             Spacer(modifier = Modifier.height(8.dp))
                                             Text(
-                                                text = getCheckInInfo(details.domDepDate, 1.0, false).countdownText ?: "",
-                                                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-                                                color = MaterialTheme.colorScheme.onSurface
+                                                text = getCheckInInfo(
+                                                    details.domDepDate,
+                                                    1.0,
+                                                    false
+                                                ).countdownText ?: "",
+                                                style = MaterialTheme.typography.bodyMedium.copy(
+                                                    fontSize = 14.sp
+                                                ),
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                textAlign = TextAlign.Center // Centered text
                                             )
                                         }
                                         Spacer(modifier = Modifier.height(8.dp))
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.Center, // Center the row content
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
                                             AsyncImage(
-                                                model = details.domFlightNo.take(2).let { "https://db.nougro.com/images/airlines/$it.png" },
-                                                contentDescription = "Airline Logo",
+                                                model = details.domFlightNo.let { "https://db.nougro.com/images/airlines/${it.take(2)}.png" },
+                                                contentDescription = "Airline logo",
                                                 modifier = Modifier.size(48.dp),
                                                 placeholder = painterResource(id = android.R.drawable.ic_menu_gallery),
                                                 error = painterResource(id = android.R.drawable.ic_menu_close_clear_cancel)
                                             )
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Text(
-                                                text = "${details.domFlightNo} to ${details.domDest ?: "N/A"}",
-                                                style = MaterialTheme.typography.titleLarge.copy(fontSize = 18.sp),
+                                                text = "${details.domFlightNo} to ${details.domDest}",
+                                                style = MaterialTheme.typography.titleLarge.copy(
+                                                    fontSize = 18.sp
+                                                ),
                                                 fontWeight = FontWeight.Bold,
-                                                color = MaterialTheme.colorScheme.primary
+                                                color = MaterialTheme.colorScheme.primary,
+                                                textAlign = TextAlign.Center // Centered text
                                             )
                                         }
                                         Spacer(modifier = Modifier.height(8.dp))
@@ -1391,7 +1575,10 @@ fun FlightsScreen(
                                         ) {
                                             Text(
                                                 text = formatTime(details.domDepDate),
-                                                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp)
+                                                style = MaterialTheme.typography.bodyMedium.copy(
+                                                    fontSize = 14.sp
+                                                ),
+                                                textAlign = TextAlign.Center // Centered text
                                             )
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Icon(
@@ -1402,44 +1589,56 @@ fun FlightsScreen(
                                             )
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Text(
-                                                text = formatArrivalTime(details.domArrDate, details.domDepDate),
-                                                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp)
+                                                text = formatArrivalTime(
+                                                    details.domArrDate,
+                                                    details.domDepDate
+                                                ),
+                                                style = MaterialTheme.typography.bodyMedium.copy(
+                                                    fontSize = 14.sp
+                                                ),
+                                                textAlign = TextAlign.Center // Centered text
                                             )
                                         }
-                                        if (isTodayDepDate(details.domDepDate) && getCheckInInfo(details.domDepDate, 1.0, false).isOpen) {
+                                        if (isTodayDepDate(details.domDepDate) && getCheckInInfo(
+                                                details.domDepDate,
+                                                1.0,
+                                                false
+                                            ).isOpen
+                                        ) {
                                             Spacer(modifier = Modifier.height(12.dp))
                                             Button(
                                                 onClick = {
-                                                    val workerId = PrefsHelper.getWorkerId(localContext)
-                                                    Log.d("EmpowerSWR", "Checked In clicked, workerId: $workerId")
+                                                    val workerId =
+                                                        PrefsHelper.getWorkerId(localContext)
                                                     if (workerId == null) {
-                                                        Log.e("EmpowerSWR", "No worker ID available for check-in")
-                                                        // Removed snackbar for "No worker ID available"
+                                                        Timber.tag("FlightsScreen").e("No worker ID available for check-in")
+                                                        coroutineScope.launch {
+                                                            snackbarHostState.showSnackbar("No worker ID available.")
+                                                        }
                                                         return@Button
                                                     }
-                                                    val fusedLocationClient = LocationServices.getFusedLocationProviderClient(localContext)
-                                                    fusedLocationClient.lastLocation.addOnSuccessListener { location ->
-                                                        if (location != null) {
-                                                            val lat = location.latitude
-                                                            val lng = location.longitude
-                                                            val action = "Checked In"
-                                                            viewModel.saveLocation(workerId, lat, lng, action)
-                                                            Log.d("EmpowerSWR", "Location saved: lat=$lat, lng=$lng, action=$action")
+                                                    requestLocationAndPerformAction(
+                                                        workerId = workerId,
+                                                        action = "Checked In",
+                                                        onSuccess = { lat, lng ->
+                                                            viewModel.saveLocation(
+                                                                workerId,
+                                                                lat,
+                                                                lng,
+                                                                "Checked In"
+                                                            )
                                                             coroutineScope.launch {
                                                                 snackbarHostState.showSnackbar("You're checked in!")
                                                             }
-                                                        } else {
-                                                            Log.e("EmpowerSWR", "Unable to get location for Checked In")
+                                                        },
+                                                        onFailure = { message ->
                                                             coroutineScope.launch {
-                                                                snackbarHostState.showSnackbar("Couldn't get your location. Try again")
+                                                                snackbarHostState.showSnackbar(
+                                                                    message
+                                                                )
                                                             }
                                                         }
-                                                    }.addOnFailureListener { e ->
-                                                        Log.e("EmpowerSWR", "Location fetch failed for Checked In: ${e.message}")
-                                                        coroutineScope.launch {
-                                                            snackbarHostState.showSnackbar("Couldn't get your location. Try again")
-                                                        }
-                                                    }
+                                                    )
                                                 },
                                                 modifier = Modifier.fillMaxWidth(0.5f),
                                                 shape = RoundedCornerShape(12.dp)
@@ -1456,13 +1655,14 @@ fun FlightsScreen(
                                 Text(
                                     text = details.hotel2,
                                     style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-                                    color = MaterialTheme.colorScheme.secondary
+                                    color = MaterialTheme.colorScheme.secondary,
+                                    textAlign = TextAlign.Center // Centered text
                                 )
                             }
 
                             // Third Leg
-                            if (!details.dom2FlightNo.isNullOrBlank() && !details.dom2DepDate.isNullOrBlank()) {
-                                Spacer(modifier = Modifier.height(12.dp))
+                            if (!details.dom2FlightNo.isNullOrEmpty() && !details.dom2DepDate.isNullOrEmpty() && !details.dom2Dest.isNullOrEmpty()) {
+                                Spacer(modifier = Modifier.height(12.dp)) // Padding between subcards
                                 Card(
                                     modifier = Modifier.fillMaxWidth(),
                                     elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
@@ -1473,46 +1673,77 @@ fun FlightsScreen(
                                     )
                                 ) {
                                     Column(
-                                        modifier = Modifier.padding(12.dp)
+                                        modifier = Modifier.padding(12.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally // Center content
                                     ) {
                                         Text(
                                             text = formatSubcardTitle(details.dom2DepDate),
-                                            style = MaterialTheme.typography.titleLarge.copy(fontSize = 18.sp),
+                                            style = MaterialTheme.typography.titleLarge.copy(
+                                                fontSize = 18.sp
+                                            ),
                                             fontWeight = FontWeight.SemiBold,
-                                            color = MaterialTheme.colorScheme.onSurface
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            textAlign = TextAlign.Center // Centered text
                                         )
                                         Spacer(modifier = Modifier.height(8.dp))
-                                        if (isDifferentDay(details.domDepDate, details.dom2DepDate) ||
-                                            isDifferentAirline(details.domFlightNo, details.dom2FlightNo)
+                                        if ((details.domDepDate.isNullOrEmpty() || details.dom2DepDate.isNullOrEmpty() || isDifferentDay(
+                                                details.domDepDate,
+                                                details.dom2DepDate
+                                            )) ||
+                                            (details.domFlightNo.isNullOrEmpty() || details.dom2FlightNo.isNullOrEmpty() || isDifferentAirline(
+                                                details.domFlightNo,
+                                                details.dom2FlightNo
+                                            ))
                                         ) {
                                             Text(
-                                                text = getCheckInInfo(details.dom2DepDate, 1.0, false).statusText,
-                                                style = MaterialTheme.typography.titleLarge.copy(fontSize = 18.sp),
+                                                text = getCheckInInfo(
+                                                    details.dom2DepDate,
+                                                    1.0,
+                                                    false
+                                                ).statusText,
+                                                style = MaterialTheme.typography.titleLarge.copy(
+                                                    fontSize = 18.sp
+                                                ),
                                                 fontWeight = FontWeight.Bold,
-                                                color = Color.Red
+                                                color = Color.Red,
+                                                textAlign = TextAlign.Center // Centered text
                                             )
                                             Spacer(modifier = Modifier.height(8.dp))
                                             Text(
-                                                text = getCheckInInfo(details.dom2DepDate, 1.0, false).countdownText ?: "",
-                                                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-                                                color = MaterialTheme.colorScheme.onSurface
+                                                text = getCheckInInfo(
+                                                    details.dom2DepDate,
+                                                    1.0,
+                                                    false
+                                                ).countdownText ?: "",
+                                                style = MaterialTheme.typography.bodyMedium.copy(
+                                                    fontSize = 14.sp
+                                                ),
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                textAlign = TextAlign.Center // Centered text
                                             )
                                         }
                                         Spacer(modifier = Modifier.height(8.dp))
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.Center, // Center the row content
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
                                             AsyncImage(
-                                                model = details.dom2FlightNo.take(2).let { "https://db.nougro.com/images/airlines/$it.png" },
-                                                contentDescription = "Airline Logo",
+                                                model = details.dom2FlightNo.let { "https://db.nougro.com/images/airlines/${it.take(2)}.png" },
+                                                contentDescription = "Airline logo",
                                                 modifier = Modifier.size(48.dp),
                                                 placeholder = painterResource(id = android.R.drawable.ic_menu_gallery),
                                                 error = painterResource(id = android.R.drawable.ic_menu_close_clear_cancel)
                                             )
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Text(
-                                                text = "${details.dom2FlightNo} to ${details.dom2Dest ?: "N/A"}",
-                                                style = MaterialTheme.typography.titleLarge.copy(fontSize = 18.sp),
+                                                text = "${details.dom2FlightNo} to ${details.dom2Dest}",
+                                                style = MaterialTheme.typography.titleLarge.copy(
+                                                    fontSize = 18.sp
+                                                ),
                                                 fontWeight = FontWeight.Bold,
-                                                color = MaterialTheme.colorScheme.primary
+                                                color = MaterialTheme.colorScheme.primary,
+                                                textAlign = TextAlign.Center // Centered text
                                             )
                                         }
                                         Spacer(modifier = Modifier.height(8.dp))
@@ -1523,7 +1754,10 @@ fun FlightsScreen(
                                         ) {
                                             Text(
                                                 text = formatTime(details.dom2DepDate),
-                                                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp)
+                                                style = MaterialTheme.typography.bodyMedium.copy(
+                                                    fontSize = 14.sp
+                                                ),
+                                                textAlign = TextAlign.Center // Centered text
                                             )
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Icon(
@@ -1534,44 +1768,56 @@ fun FlightsScreen(
                                             )
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Text(
-                                                text = formatArrivalTime(details.dom2ArrDate, details.dom2DepDate),
-                                                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp)
+                                                text = formatArrivalTime(
+                                                    details.dom2ArrDate,
+                                                    details.dom2DepDate
+                                                ),
+                                                style = MaterialTheme.typography.bodyMedium.copy(
+                                                    fontSize = 14.sp
+                                                ),
+                                                textAlign = TextAlign.Center // Centered text
                                             )
                                         }
-                                        if (isTodayDepDate(details.dom2DepDate) && getCheckInInfo(details.dom2DepDate, 1.0, false).isOpen) {
+                                        if (isTodayDepDate(details.dom2DepDate) && getCheckInInfo(
+                                                details.dom2DepDate,
+                                                1.0,
+                                                false
+                                            ).isOpen
+                                        ) {
                                             Spacer(modifier = Modifier.height(12.dp))
                                             Button(
                                                 onClick = {
-                                                    val workerId = PrefsHelper.getWorkerId(localContext)
-                                                    Log.d("EmpowerSWR", "Checked In clicked, workerId: $workerId")
+                                                    val workerId =
+                                                        PrefsHelper.getWorkerId(localContext)
                                                     if (workerId == null) {
-                                                        Log.e("EmpowerSWR", "No worker ID available for check-in")
-                                                        // Removed snackbar for "No worker ID available"
+                                                        Timber.tag("FlightsScreen").e("No worker ID available for check-in")
+                                                        coroutineScope.launch {
+                                                            snackbarHostState.showSnackbar("No worker ID available.")
+                                                        }
                                                         return@Button
                                                     }
-                                                    val fusedLocationClient = LocationServices.getFusedLocationProviderClient(localContext)
-                                                    fusedLocationClient.lastLocation.addOnSuccessListener { location ->
-                                                        if (location != null) {
-                                                            val lat = location.latitude
-                                                            val lng = location.longitude
-                                                            val action = "Checked In"
-                                                            viewModel.saveLocation(workerId, lat, lng, action)
-                                                            Log.d("EmpowerSWR", "Location saved: lat=$lat, lng=$lng, action=$action")
+                                                    requestLocationAndPerformAction(
+                                                        workerId = workerId,
+                                                        action = "Checked In",
+                                                        onSuccess = { lat, lng ->
+                                                            viewModel.saveLocation(
+                                                                workerId,
+                                                                lat,
+                                                                lng,
+                                                                "Checked In"
+                                                            )
                                                             coroutineScope.launch {
                                                                 snackbarHostState.showSnackbar("You're checked in!")
                                                             }
-                                                        } else {
-                                                            Log.e("EmpowerSWR", "Unable to get location for Checked In")
+                                                        },
+                                                        onFailure = { message ->
                                                             coroutineScope.launch {
-                                                                snackbarHostState.showSnackbar("Couldn't get your location. Try again")
+                                                                snackbarHostState.showSnackbar(
+                                                                    message
+                                                                )
                                                             }
                                                         }
-                                                    }.addOnFailureListener { e ->
-                                                        Log.e("EmpowerSWR", "Location fetch failed for Checked In: ${e.message}")
-                                                        coroutineScope.launch {
-                                                            snackbarHostState.showSnackbar("Couldn't get your location. Try again")
-                                                        }
-                                                    }
+                                                    )
                                                 },
                                                 modifier = Modifier.fillMaxWidth(0.5f),
                                                 shape = RoundedCornerShape(12.dp)
@@ -1583,14 +1829,16 @@ fun FlightsScreen(
                                 }
                             }
 
-                            if (!details.intFlightNo.isNullOrEmpty() || !details.intDepDate.isNullOrEmpty() ||
-                                !details.domFlightNo.isNullOrBlank() || !details.dom2FlightNo.isNullOrBlank()) {
-                                Spacer(modifier = Modifier.height(12.dp))
+                            if (!details.intFlightNo.isNullOrEmpty() && !details.intDepDate.isNullOrEmpty() ||
+                                !details.domFlightNo.isNullOrEmpty() && !details.domDepDate.isNullOrEmpty() ||
+                                !details.dom2FlightNo.isNullOrEmpty() && !details.dom2DepDate.isNullOrEmpty()
+                            ) {
+                                Spacer(modifier = Modifier.height(12.dp)) // Padding before divider
                                 HorizontalDivider(
                                     thickness = 1.dp,
                                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
                                 )
-                                Spacer(modifier = Modifier.height(12.dp))
+                                Spacer(modifier = Modifier.height(12.dp)) // Padding after divider
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.End
@@ -1598,35 +1846,33 @@ fun FlightsScreen(
                                     Button(
                                         onClick = {
                                             val workerId = PrefsHelper.getWorkerId(localContext)
-                                            Log.d("EmpowerSWR", "Mi Stap lo Ples ia clicked, workerId: $workerId")
                                             if (workerId == null) {
-                                                Log.e("EmpowerSWR", "No worker ID available for travel location")
-                                                // Removed snackbar for "No worker ID available"
+                                                Timber.tag("FlightsScreen").e("No worker ID available for travel location")
+                                                coroutineScope.launch {
+                                                    snackbarHostState.showSnackbar("No worker ID available.")
+                                                }
                                                 return@Button
                                             }
-                                            val fusedLocationClient = LocationServices.getFusedLocationProviderClient(localContext)
-                                            fusedLocationClient.lastLocation.addOnSuccessListener { location ->
-                                                if (location != null) {
-                                                    val lat = location.latitude
-                                                    val lng = location.longitude
-                                                    val action = "Travel Location"
-                                                    viewModel.saveLocation(workerId, lat, lng, action)
-                                                    Log.d("EmpowerSWR", "Location saved: lat=$lat, lng=$lng, action=$action")
+                                            requestLocationAndPerformAction(
+                                                workerId = workerId,
+                                                action = "Travel Location",
+                                                onSuccess = { lat, lng ->
+                                                    viewModel.saveLocation(
+                                                        workerId,
+                                                        lat,
+                                                        lng,
+                                                        "Travel Location"
+                                                    )
                                                     coroutineScope.launch {
                                                         snackbarHostState.showSnackbar("Your location is saved!")
                                                     }
-                                                } else {
-                                                    Log.e("EmpowerSWR", "Unable to get location for Mi Stap lo Ples ia")
+                                                },
+                                                onFailure = { message ->
                                                     coroutineScope.launch {
-                                                        snackbarHostState.showSnackbar("Couldn't get your location. Try again")
+                                                        snackbarHostState.showSnackbar(message)
                                                     }
                                                 }
-                                            }.addOnFailureListener { e ->
-                                                Log.e("EmpowerSWR", "Location fetch failed for Mi Stap lo Ples ia: ${e.message}")
-                                                coroutineScope.launch {
-                                                    snackbarHostState.showSnackbar("Couldn't get your location. Try again")
-                                                }
-                                            }
+                                            )
                                         },
                                         modifier = Modifier.weight(1f),
                                         shape = RoundedCornerShape(12.dp)
@@ -1637,7 +1883,7 @@ fun FlightsScreen(
                             }
                         }
                     }
-                }?: run {
+                } ?: run {
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1679,28 +1925,31 @@ fun FlightsScreen(
                                     onClick = {
                                         val workerId = PrefsHelper.getWorkerId(localContext)
                                         if (workerId != null && token != null && isNetworkAvailable.value && isScreenActive.value) {
-                                            Log.d("EmpowerSWR", "Retry fetching flight details for workerId: $workerId")
                                             viewModel.fetchFlightDetails(workerId) { error ->
                                                 if (error != null) {
-                                                    Log.e("EmpowerSWR", "Retry flight fetch error: ${error.message}")
+                                                    Timber.tag("FlightsScreen").e(error, "Retry flight fetch error")
                                                     if (System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
                                                         coroutineScope.launch {
                                                             snackbarHostState.showSnackbar("Check your internet and try again")
-                                                            lastNetworkErrorShown = System.currentTimeMillis()
+                                                            lastNetworkErrorShown =
+                                                                System.currentTimeMillis()
                                                         }
                                                     }
                                                 }
                                             }
                                         } else {
-                                            Log.e("EmpowerSWR", "No worker ID, token, network, or screen inactive for retry")
+                                            Timber.tag("FlightsScreen").e("No worker ID, token, network, or screen inactive for retry")
                                             if (!isNetworkAvailable.value && System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
                                                 coroutineScope.launch {
                                                     snackbarHostState.showSnackbar("Check your internet and try again")
-                                                    lastNetworkErrorShown = System.currentTimeMillis()
+                                                    lastNetworkErrorShown =
+                                                        System.currentTimeMillis()
                                                 }
                                             } else if (token == null) {
                                                 navController.navigate("login") {
-                                                    popUpTo(navController.graph.startDestinationId) { inclusive = true }
+                                                    popUpTo(navController.graph.startDestinationId) {
+                                                        inclusive = true
+                                                    }
                                                     launchSingleTop = true
                                                 }
                                             }

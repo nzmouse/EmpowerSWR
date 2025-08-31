@@ -38,10 +38,14 @@ import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
 import retrofit2.HttpException
 import java.io.File
-import android.util.Log
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.core.net.toUri
+import androidx.navigation.compose.currentBackStackEntryAsState
+import com.empowerswr.luksave.MainActivity
+import com.empowerswr.luksave.findActivity
 import java.net.URLEncoder
-
+import timber.log.Timber
 @Composable
 fun DocumentsScreen(
     uploadService: UploadService,
@@ -55,6 +59,8 @@ fun DocumentsScreen(
     var selectedDocumentType by remember { mutableStateOf("") }
     var files by remember { mutableStateOf<List<FileItem>>(emptyList()) }
     var isLoadingFiles by remember { mutableStateOf(false) }
+    var lastClickTime by rememberSaveable { mutableStateOf(0L) } // Debounce navigation
+    var navigationAttemptCount by remember { mutableStateOf(0) } // Navigation attempt counter
     val documentTypes = listOf(
         "Passport" to "PPT",
         "National ID Card" to "NID",
@@ -75,55 +81,53 @@ fun DocumentsScreen(
         try {
             val token = PrefsHelper.getJwtToken(context)
             if (token.isEmpty()) {
-                snackbarHostState.showSnackbar("Please log in to view documents")
-                Log.w("EmpowerSWR", "File list failed: No valid JWT")
+                snackbarHostState.showSnackbar("Please Log-in to view documents")
+                Timber.w("File list failed: No valid JWT")
             } else {
                 val fileList = listFilesService.listFiles("Bearer $token")
-                files = fileList ?: emptyList()
-                Log.d("EmpowerSWR", "Fetched files: $fileList")
+                files = fileList?.map { item ->
+                    item.copy(name = item.name.replace("+", " ").replace("%20", " ").trim())
+                } ?: emptyList()
+                Timber.i("Fetched %d files", files.size)
             }
         } catch (e: HttpException) {
-            Log.e("EmpowerSWR", "File list failed: HTTP ${e.code()} ${e.message()}", e)
+            Timber.tag("DocumentsScreen").e(e, "File list failed: HTTP ${e.code()} ${e.message()}")
             snackbarHostState.showSnackbar("Failed to load files: HTTP ${e.code()}")
         } catch (e: Exception) {
-            Log.e("EmpowerSWR", "File list failed: ${e.message}", e)
             snackbarHostState.showSnackbar("Failed to load files: ${e.message}")
         } finally {
             isLoadingFiles = false
         }
     }
 
-    Log.d("EmpowerSWR", "DocumentsScreen composable rendered")
-
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        Log.d("EmpowerSWR", "File picker result: uri=$uri")
         if (uri != null && selectedDocumentType.isNotEmpty()) {
             isUploading = true
             scope.launch {
                 try {
-                    Log.d("EmpowerSWR", "Starting file picker upload: $uri")
                     uploadFile(context, uri, selectedDocumentType, documentTypes, uploadService, isScanned = false)
                     snackbarHostState.showSnackbar("Upload successful")
                     // Reload file list
                     val token = PrefsHelper.getJwtToken(context)
                     if (!token.isEmpty()) {
                         val fileList = listFilesService.listFiles("Bearer $token")
-                        files = fileList ?: emptyList()
-                        Log.d("EmpowerSWR", "Refreshed files: $fileList")
+                        files = fileList?.map { item ->
+                            item.copy(name = item.name.replace("+", " ").replace("%20", " ").trim())
+                        } ?: emptyList()
+                        Timber.i("Refreshed %d files", files.size)
                     }
                 } catch (e: HttpException) {
-                    Log.e("EmpowerSWR", "Upload failed: HTTP ${e.code()} ${e.message()}", e)
+                    Timber.tag("DocumentsScreen").e(e, "Upload failed: HTTP ${e.code()} ${e.message()}")
                     val errorBody = e.response()?.errorBody()?.string()
                     snackbarHostState.showSnackbar("Upload failed: HTTP ${e.code()} ${errorBody ?: e.message()}")
                 } catch (e: Exception) {
-                    Log.e("EmpowerSWR", "Upload failed: ${e.message}", e)
                     snackbarHostState.showSnackbar("Upload failed: ${e.message ?: "Unknown error"}")
                 } finally {
                     isUploading = false
                 }
             }
         } else {
-            Log.w("EmpowerSWR", "File picker: Invalid uri=$uri or documentType=$selectedDocumentType")
+            Timber.w("File picker: Invalid uri=$uri or documentType=$selectedDocumentType")
         }
     }
 
@@ -136,49 +140,47 @@ fun DocumentsScreen(
     val scannerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartIntentSenderForResult()
     ) { activityResult ->
-        Log.d("EmpowerSWR", "Scanner result: resultCode=${activityResult.resultCode}")
         scope.launch {
             if (activityResult.resultCode == Activity.RESULT_OK) {
                 val result = GmsDocumentScanningResult.fromActivityResultIntent(activityResult.data)
                 if (result != null && selectedDocumentType.isNotEmpty()) {
                     isUploading = true
                     try {
-                        val pdfUri = result.getPdf()?.uri
-                        Log.d("EmpowerSWR", "Scanner PDF URI: $pdfUri")
+                        val pdfUri = result.pdf?.uri
                         if (pdfUri != null) {
-                            Log.d("EmpowerSWR", "Starting scanner upload: $pdfUri")
                             uploadFile(context, pdfUri, selectedDocumentType, documentTypes, uploadService, isScanned = true)
                             snackbarHostState.showSnackbar("Scan and upload successful")
                             // Reload file list
                             val token = PrefsHelper.getJwtToken(context)
                             if (!token.isEmpty()) {
                                 val fileList = listFilesService.listFiles("Bearer $token")
-                                files = fileList ?: emptyList()
-                                Log.d("EmpowerSWR", "Refreshed files: $fileList")
+                                files = fileList.map { item ->
+                                    item.copy(name = item.name.replace("+", " ").replace("%20", " ").trim())
+                                } ?: emptyList()
+                                Timber.i("Refreshed %d files", files.size)
                             }
                         } else {
                             snackbarHostState.showSnackbar("Failed to scan document")
-                            Log.e("EmpowerSWR", "Scanner failed: No PDF URI")
+                            Timber.tag("DocumentsScreen").e("Scanner failed: No PDF URI")
                         }
                     } catch (e: HttpException) {
-                        Log.e("EmpowerSWR", "Upload failed: HTTP ${e.code()} ${e.message()}", e)
+                        Timber.tag("DocumentsScreen").e("Upload failed: HTTP ${e.code()} ${e.message()}", e)
                         val errorBody = e.response()?.errorBody()?.string()
                         snackbarHostState.showSnackbar("Upload failed: HTTP ${e.code()} ${errorBody ?: e.message()}")
                     } catch (e: Exception) {
-                        Log.e("EmpowerSWR", "Upload failed: ${e.message}", e)
                         snackbarHostState.showSnackbar("Upload failed: ${e.message ?: "Unknown error"}")
                     } finally {
                         isUploading = false
                     }
                 } else {
-                    Log.w("EmpowerSWR", "Scanner result is null or documentType=$selectedDocumentType")
+                    Timber.w("Scanner result is null or documentType=$selectedDocumentType")
                 }
             } else if (activityResult.resultCode == Activity.RESULT_CANCELED) {
                 snackbarHostState.showSnackbar("Scan cancelled")
-                Log.d("EmpowerSWR", "Scan cancelled")
+                Timber.i("Scan cancelled")
             } else {
                 snackbarHostState.showSnackbar("Scan failed")
-                Log.e("EmpowerSWR", "Scan failed: resultCode=${activityResult.resultCode}")
+                Timber.tag("DocumentsScreen").e("Scan failed: resultCode=${activityResult.resultCode}")
             }
         }
     }
@@ -203,10 +205,7 @@ fun DocumentsScreen(
                     modifier = Modifier.fillMaxWidth(),
                     readOnly = true,
                     trailingIcon = {
-                        IconButton(onClick = {
-                            Log.d("EmpowerSWR", "Dropdown clicked")
-                            expanded = true
-                        }) {
+                        IconButton(onClick = { expanded = true }) {
                             Icon(
                                 imageVector = Icons.Default.ArrowDropDown,
                                 contentDescription = "Dropdown"
@@ -216,16 +215,12 @@ fun DocumentsScreen(
                 )
                 DropdownMenu(
                     expanded = expanded,
-                    onDismissRequest = {
-                        Log.d("EmpowerSWR", "Dropdown dismissed")
-                        expanded = false
-                    }
+                    onDismissRequest = { expanded = false }
                 ) {
                     documentTypes.forEach { (type, _) ->
                         DropdownMenuItem(
                             text = { Text(type) },
                             onClick = {
-                                Log.d("EmpowerSWR", "Selected document type: $type")
                                 selectedDocumentType = type
                                 expanded = false
                             }
@@ -243,17 +238,16 @@ fun DocumentsScreen(
             ) {
                 Button(
                     onClick = {
-                        Log.d("EmpowerSWR", "Scan Document button clicked")
                         if (selectedDocumentType.isEmpty()) {
                             Toast.makeText(context, "Select a document type", Toast.LENGTH_SHORT).show()
-                            Log.w("EmpowerSWR", "Scan failed: No document type selected")
+                            Timber.w("Scan failed: No document type selected")
                         } else {
                             val token = PrefsHelper.getJwtToken(context)
                             if (token.isEmpty()) {
                                 scope.launch {
-                                    snackbarHostState.showSnackbar("Please log in to scan documents")
+                                    snackbarHostState.showSnackbar("Please Log-in to scan documents")
                                 }
-                                Log.w("EmpowerSWR", "Scan failed: No valid JWT")
+                                Timber.w("Scan failed: No valid JWT")
                             } else {
                                 val activity = context as? Activity
                                 if (activity != null) {
@@ -261,25 +255,22 @@ fun DocumentsScreen(
                                         try {
                                             scanner.getStartScanIntent(activity)
                                                 .addOnSuccessListener { intentSender ->
-                                                    Log.d("EmpowerSWR", "Scanner intent created")
                                                     scannerLauncher.launch(
                                                         IntentSenderRequest.Builder(intentSender).build()
                                                     )
                                                 }
                                                 .addOnFailureListener { e ->
-                                                    Log.e("EmpowerSWR", "Scanner failed to start: ${e.message}", e)
                                                     scope.launch {
                                                         snackbarHostState.showSnackbar("Failed to start scanner: ${e.message}")
                                                     }
                                                 }
                                         } catch (e: Exception) {
-                                            Log.e("EmpowerSWR", "Scanner intent creation failed: ${e.message}", e)
                                             snackbarHostState.showSnackbar("Scanner error: ${e.message}")
                                         }
                                     }
                                 } else {
                                     Toast.makeText(context, "Activity context required", Toast.LENGTH_SHORT).show()
-                                    Log.e("EmpowerSWR", "Scan failed: No activity context")
+                                    Timber.tag("DocumentsScreen").e("Scan failed: No activity context")
                                 }
                             }
                         }
@@ -293,19 +284,17 @@ fun DocumentsScreen(
 
                 Button(
                     onClick = {
-                        Log.d("EmpowerSWR", "Upload Document button clicked")
                         if (selectedDocumentType.isEmpty()) {
                             Toast.makeText(context, "Select a document type", Toast.LENGTH_SHORT).show()
-                            Log.w("EmpowerSWR", "Upload failed: No document type selected")
+                            Timber.w("Upload failed: No document type selected")
                         } else {
                             val token = PrefsHelper.getJwtToken(context)
                             if (token.isEmpty()) {
                                 scope.launch {
-                                    snackbarHostState.showSnackbar("Please log in to upload documents")
+                                    snackbarHostState.showSnackbar("Please Log-in to upload documents")
                                 }
-                                Log.w("EmpowerSWR", "Upload failed: No valid JWT")
+                                Timber.w("Upload failed: No valid JWT")
                             } else {
-                                Log.d("EmpowerSWR", "Launching file picker")
                                 filePicker.launch("application/pdf,image/jpeg,image/png")
                             }
                         }
@@ -359,18 +348,41 @@ fun DocumentsScreen(
                                     Text(file.name, modifier = Modifier.weight(1f))
                                     IconButton(
                                         onClick = {
-                                            scope.launch {
-                                                try {
-                                                    // Extract full filename from URL
-                                                    val fullFilename = file.url.substringAfterLast("/").substringBefore("?")
-                                                    val encodedFilename = URLEncoder.encode(fullFilename, "UTF-8")
-                                                    val encodedUrl = URLEncoder.encode(file.url, "UTF-8")
-                                                    navController.navigate("documentViewer/$encodedFilename/$encodedUrl")
-                                                    Log.d("EmpowerSWR", "Navigating to DocumentViewer with filename: $fullFilename, URL: ${file.url}")
-                                                } catch (e: Exception) {
-                                                    Log.e("EmpowerSWR", "Navigation failed: ${e.message}", e)
-                                                    snackbarHostState.showSnackbar("Navigation failed: ${e.message}")
+                                            val currentTime = System.currentTimeMillis()
+                                            val fullFilename = file.url.substringAfterLast("/").substringBefore("?").replace("+", " ").replace("%20", " ").trim()
+                                            if (currentTime - lastClickTime > 2000) { // Keep time-based debounce
+                                                lastClickTime = currentTime
+                                                var lastNavigatedFile = fullFilename
+                                                navigationAttemptCount++
+                                                Timber.d("DocumentsScreen: Navigation attempt $navigationAttemptCount for filename=$fullFilename")
+                                                scope.launch {
+                                                    try {
+                                                        // Map to nickname for navigation
+                                                        val docTypeCode = documentTypes.find { fullFilename.endsWith("- ${it.second}.pdf") }?.second
+                                                            ?: documentTypes.find { fullFilename == "${it.first}.pdf" }?.second
+                                                        val nickname = docTypeCode?.let { documentTypes.find { it.second == docTypeCode }?.first } ?: fullFilename.substringBeforeLast(".")
+                                                        // Use the base filename without checking for existence
+                                                        val targetNickname = "$nickname.pdf" // Always use base filename, allowing overwrite
+                                                        val encodedFilename = URLEncoder.encode(targetNickname, "UTF-8")
+                                                        val encodedUrl = URLEncoder.encode(file.url, "UTF-8")
+                                                        Timber.d("DocumentsScreen: Navigating to DocumentViewer with filename: $targetNickname, URL: ${file.url}")
+                                                        // Clear previous documentViewer entries
+                                                        navController.popBackStack("documentViewer/{filename}/{url}", inclusive = true, saveState = false)
+                                                        navController.navigate("documentViewer/$encodedFilename/$encodedUrl") {
+                                                            popUpTo(navController.graph.startDestinationId) { saveState = true }
+                                                            launchSingleTop = true
+                                                            restoreState = false
+                                                        }
+                                                        // Log back stack after navigation
+                                                        val backStack = navController.currentBackStack.value.map { it.destination.route }
+                                                        Timber.d("DocumentsScreen: Back stack after navigation: $backStack")
+                                                    } catch (e: Exception) {
+                                                        Timber.e(e, "DocumentsScreen: Navigation failed")
+                                                        snackbarHostState.showSnackbar("Navigation failed: ${e.message}")
+                                                    }
                                                 }
+                                            } else {
+                                                Timber.v("DocumentsScreen: Navigation debounced for filename=${file.name}, lastClickTime=$lastClickTime, currentTime=$currentTime")
                                             }
                                         }
                                     ) {
@@ -383,10 +395,20 @@ fun DocumentsScreen(
                                         onClick = {
                                             scope.launch {
                                                 try {
-                                                    downloadFile(context, file.url, file.name, file.extension)
-                                                    snackbarHostState.showSnackbar("Downloading ${file.name}")
+                                                    val fullFilename = file.url.substringAfterLast("/").substringBefore("?").replace("+", " ").replace("%20", " ").trim()
+                                                    val docTypeCode = documentTypes.find { fullFilename.endsWith("- ${it.second}.pdf") }?.second
+                                                        ?: documentTypes.find { fullFilename == "${it.first}.pdf" }?.second
+                                                    val nickname = docTypeCode?.let { documentTypes.find { it.second == docTypeCode }?.first } ?: fullFilename.substringBeforeLast(".")
+                                                    val targetNickname = (0..10).map { i ->
+                                                        if (i == 0) "$nickname.pdf" else "$nickname-$i.pdf"
+                                                    }.find { nick ->
+                                                        !File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), nick).exists()
+                                                    } ?: fullFilename
+                                                    val downloadId = downloadFile(context, file.url, targetNickname.substringBeforeLast("."), targetNickname.substringAfterLast("."))
+                                                    snackbarHostState.showSnackbar("Downloading $targetNickname")
+                                                    (context.findActivity() as? MainActivity)?.storeDownload(downloadId, targetNickname)
                                                 } catch (e: Exception) {
-                                                    Log.e("EmpowerSWR", "Download failed: ${e.message}", e)
+                                                    Timber.tag("DocumentsScreen").e(e, "Download failed")
                                                     snackbarHostState.showSnackbar("Download failed: ${e.message}")
                                                 }
                                             }
@@ -429,13 +451,13 @@ private suspend fun uploadFile(
     uploadService: UploadService,
     isScanned: Boolean = false
 ) {
-    Log.d("EmpowerSWR", "Starting upload for docType: $docType, uri: $uri, isScanned: $isScanned")
+    Timber.i("Starting upload")
     val contentResolver = context.contentResolver
     val (givenName, surname) = PrefsHelper.getWorkerDetails(context)
-    val capitalizedGivenName = givenName.split(" ").joinToString(" ") { it.lowercase().replaceFirstChar { it.uppercaseChar() } }
-    val capitalizedSurname = surname.split(" ").joinToString(" ") { it.lowercase().replaceFirstChar { it.uppercaseChar() } }
+    val capitalizedGivenName = givenName.split(" ").joinToString(" ") { it.lowercase().replaceFirstChar { it -> it.uppercaseChar() } }
+    val capitalizedSurname = surname.split(" ").joinToString(" ") { it.lowercase().replaceFirstChar { it -> it.uppercaseChar() } }
     val code = docTypes.find { it.first == docType }?.second ?: run {
-        Log.e("EmpowerSWR", "Invalid docType: $docType")
+        Timber.tag("DocumentsScreen").e("Invalid docType %s", docType)
         return
     }
     val extension = if (isScanned) {
@@ -446,13 +468,12 @@ private suspend fun uploadFile(
             "image/jpeg" -> "jpg"
             "image/png" -> "png"
             else -> {
-                Log.e("EmpowerSWR", "Unsupported MIME type: ${contentResolver.getType(uri)}")
+                Timber.tag("DocumentsScreen").e("Unsupported MIME type: %s", contentResolver.getType(uri))
                 return
             }
         }
     }
     val fileName = "$capitalizedGivenName $capitalizedSurname - $code.$extension"
-    Log.d("EmpowerSWR", "File name: $fileName")
     val tempFile = File(context.cacheDir, fileName)
 
     try {
@@ -461,9 +482,8 @@ private suspend fun uploadFile(
                 input.copyTo(output)
             }
         }
-        Log.d("EmpowerSWR", "File copied to: ${tempFile.absolutePath}, size: ${tempFile.length()}")
     } catch (e: Exception) {
-        Log.e("EmpowerSWR", "File copy failed: ${e.message}", e)
+        Timber.tag("DocumentsScreen").e(e, "File copy failed")
         throw e
     }
 
@@ -472,33 +492,31 @@ private suspend fun uploadFile(
     } else {
         contentResolver.getType(uri)?.toMediaType() ?: "application/octet-stream".toMediaType()
     }
-    Log.d("EmpowerSWR", "Content-Type: $contentType")
     val requestFile = tempFile.asRequestBody(contentType)
     val body = MultipartBody.Part.createFormData("file", fileName, requestFile)
     val token = PrefsHelper.getJwtToken(context)
-    Log.d("EmpowerSWR", "Sending request with token: $token")
     try {
         val response = uploadService.uploadFile("Bearer $token", body)
-        Log.d("EmpowerSWR", "Upload response: $response")
     } catch (e: HttpException) {
-        Log.e("EmpowerSWR", "Upload failed: HTTP ${e.code()} ${e.message()}", e)
+        Timber.tag("DocumentsScreen").e(e, "Upload failed: HTTP")
         val errorBody = e.response()?.errorBody()?.string()
         throw HttpException(e.response()!!).apply { initCause(Exception("HTTP ${e.code()}: ${errorBody ?: e.message()}")) }
     } catch (e: Exception) {
-        Log.e("EmpowerSWR", "Upload failed: ${e.message}", e)
         throw e
     }
 }
 
-private fun downloadFile(context: Context, url: String, name: String, extension: String) {
-    val request = DownloadManager.Request(Uri.parse(url))
-        .setTitle("Downloading $name")
-        .setDescription("Downloading $name.$extension")
-        .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "$name.$extension")
+private fun downloadFile(context: Context, url: String, name: String, extension: String): Long {
+    val normalizedName = name.replace("+", " ").replace("%20", " ").trim()
+    val request = DownloadManager.Request(url.toUri())
+        .setTitle("Downloading $normalizedName")
+        .setDescription("Downloading $normalizedName.$extension")
+        .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "$normalizedName.$extension")
         .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
         .setAllowedOverMetered(true)
         .setAllowedOverRoaming(true)
     val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-    downloadManager.enqueue(request)
-    Log.d("EmpowerSWR", "Started download: $url")
+    val downloadId = downloadManager.enqueue(request)
+    Timber.i("Started download: $normalizedName with ID: $downloadId")
+    return downloadId
 }

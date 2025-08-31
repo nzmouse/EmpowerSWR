@@ -1,12 +1,10 @@
 package com.empowerswr.luksave
 
 import android.app.Application
-import android.util.Log
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.google.gson.Gson
 import com.google.gson.JsonParseException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,9 +17,10 @@ import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import java.net.UnknownHostException
-import java.util.Base64
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
+import timber.log.Timber
+import kotlinx.coroutines.flow.asStateFlow
 
 class EmpowerViewModel(application: Application) : AndroidViewModel(application) {
     private val _token = mutableStateOf<String?>(null)
@@ -45,6 +44,9 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
     private val _checkInError = mutableStateOf<String?>(null)
     val checkInError: State<String?> = _checkInError
 
+    private val _flightError = mutableStateOf<String?>(null)
+    val flightError: State<String?> = _flightError
+
     private val _notifications = mutableStateOf<List<Notification>>(emptyList())
     val notifications: State<List<Notification>> = _notifications
 
@@ -65,10 +67,8 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         .build()
     private val api = retrofit.create(EmpowerApi::class.java)
 
-    private val gson = Gson()
-
     private val _pendingFields = mutableStateOf<Set<String>>(emptySet())
-    val pendingFields: State<Set<String>> = _pendingFields  // Expose for UI
+    val pendingFields: State<Set<String>> = _pendingFields
 
     private val _flightDetails = mutableStateOf<FlightDetails?>(null)
     val flightDetails: State<FlightDetails?> = _flightDetails
@@ -77,30 +77,29 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
     val pdbDetails: State<PdbDetails?> = _pdbDetails
 
     private val _internalPdbDetails = mutableStateOf<PdbDetails?>(null)
-    val internalPbDetails: State<PdbDetails?> = _internalPdbDetails
 
     private val _directoryEntries = MutableStateFlow<List<DirectoryEntry>>(emptyList())
     val directoryEntries: StateFlow<List<DirectoryEntry>> = _directoryEntries
 
-    private val _flightError = mutableStateOf<String?>(null)
-    val flightError: State<String?> = _flightError
-
     private val _pdbError = mutableStateOf<String?>(null)
-    val pdbError: State<String?> = _pdbError
+
+    private val _teamEntries = MutableStateFlow<List<Team>>(emptyList())
+    val teamEntries: StateFlow<List<Team>> = _teamEntries.asStateFlow()
+
+    private val _teamLocations = MutableStateFlow<Map<Int, List<TeamLocation>>>(emptyMap())
+    val teamLocations: StateFlow<Map<Int, List<TeamLocation>>> = _teamLocations.asStateFlow()
+
+    private val _notices = MutableStateFlow<String?>(null)
+    val notices: StateFlow<String?> = _notices
 
     init {
         val savedToken = PrefsHelper.getToken(getApplication())
         val savedTokenExpiry = PrefsHelper.getTokenExpiry(getApplication())
-        Log.d("EmpowerSWR", "init - Saved token: $savedToken, expiry: $savedTokenExpiry")
         if (savedToken != null && savedTokenExpiry != null) {
             val currentTime = System.currentTimeMillis() / 1000
             if (savedTokenExpiry > currentTime && isValidJwt(savedToken)) {
                 _token.value = savedToken
-                _token.value = savedToken
-                Log.d("EmpowerSWR", "init - Restored valid token: $savedToken")
-
             } else {
-                Log.d("EmpowerSWR", "init - Saved token expired or invalid, clearing")
                 PrefsHelper.clearToken(getApplication())
                 _token.value = null
             }
@@ -108,7 +107,6 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
 
         viewModelScope.launch {
             NotificationHandler.notificationFlow.collect { notificationData ->
-                Log.d("EmpowerSWR", "Received notificationData in ViewModel: ${notificationData.first}: ${notificationData.second}")
                 val notification = Notification(notificationData.first ?: "", notificationData.second ?: "")
                 _notifications.value = _notifications.value.toMutableList().apply { add(notification) }
             }
@@ -119,34 +117,17 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         return token.split(".").size == 3
     }
 
-    private fun getWorkerIdFromJwt(token: String?): String? {
-        if (token == null || !isValidJwt(token)) return null
-        try {
-            val payload = token.split(".")[1]
-            val decodedPayload = String(Base64.getUrlDecoder().decode(payload))
-            val json = gson.fromJson(decodedPayload, Map::class.java)
-            return json["worker_id"]?.toString()
-        } catch (e: Exception) {
-            Log.e("EmpowerSWR", "Failed to decode JWT: ${e.message}")
-            return null
-        }
-    }
-
     fun register(passport: String, surname: String, pin: String) {
         viewModelScope.launch {
             try {
                 val request = RegistrationRequest(passport, surname, pin)
-                Log.d("EmpowerSWR", "Sending registration request: $request")
                 val response: Response<RegistrationResponse> = api.register(request)
-                Log.d("EmpowerSWR", "Registration response: code=${response.code()}, body=${response.body()}")
-                val errorBody = response.errorBody()?.string() // Store errorBody once
-                Log.d("EmpowerSWR", "Raw error body: $errorBody")
+                val errorBody = response.errorBody()?.string()
                 if (response.isSuccessful) {
                     response.body()?.let { tokenResponse ->
                         _token.value = tokenResponse.token
                         PrefsHelper.saveWorkerId(getApplication(), tokenResponse.workerId)
                         PrefsHelper.saveToken(getApplication(), tokenResponse.token, tokenResponse.expiry)
-                        Log.d("EmpowerSWR", "Registration successful: workerId=${tokenResponse.workerId}")
                         fetchWorkerDetails()
                         fetchHistory()
                         fetchAlerts()
@@ -156,26 +137,25 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
                         try {
                             val jsonObject = JSONObject(it)
                             jsonObject.optString("error", "Registration failed: Unknown error")
-                        } catch (e: Exception) {
-                            Log.e("EmpowerSWR", "Failed to parse error JSON: ${e.message}, errorBody=$errorBody")
+                        } catch (_: Exception) {
                             "Registration failed: Invalid server response"
                         }
                     } ?: "Registration failed: HTTP ${response.code()}"
                     _loginError.value = errorMessage
-                    Log.e("EmpowerSWR", "Registration error: HTTP ${response.code()}, errorMessage=$errorMessage")
+                    Timber.e("Registration failed: HTTP ${response.code()}")
                 }
             } catch (e: JsonParseException) {
+                Timber.e(e, "JSON parsing error during registration")
                 _loginError.value = "Registration failed: Invalid server response"
-                Log.e("EmpowerSWR", "JSON parsing error: ${e.message}", e)
             } catch (e: HttpException) {
-                _loginError.value = "Registration failed: HTTP ${e.code()} - ${e.message()}"
-                Log.e("EmpowerSWR", "Registration failed: ${e.message}", e)
+                Timber.e(e, "HTTP error during registration")
+                _loginError.value = "Registration failed: HTTP ${e.code()}"
             } catch (e: UnknownHostException) {
+                Timber.e(e, "Network error during registration")
                 _loginError.value = "Registration failed: Unable to connect to server"
-                Log.e("EmpowerSWR", "Registration failed: ${e.message}", e)
             } catch (e: Exception) {
+                Timber.e(e, "Unexpected error during registration")
                 _loginError.value = "Registration failed: ${e.message}"
-                Log.e("EmpowerSWR", "Registration failed: ${e.message}", e)
             }
         }
     }
@@ -184,9 +164,8 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             try {
                 val response = api.login(LoginRequest(workerId, pin))
-                Log.d("EmpowerSWR", "login - Received token: ${response.token}")
                 if (!isValidJwt(response.token)) {
-                    throw IllegalStateException("Invalid JWT token received from login")
+                    throw IllegalStateException("Invalid JWT token received")
                 }
                 _token.value = response.token
                 PrefsHelper.saveWorkerId(getApplication(), response.workerId)
@@ -198,10 +177,10 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
             } catch (e: Exception) {
                 _loginError.value = when (e) {
                     is UnknownHostException -> "Login failed: Unable to connect to server."
-                    is HttpException -> "Login failed: HTTP ${e.code()} - ${e.message()}"
+                    is HttpException -> "Login failed: HTTP ${e.code()}"
                     else -> "Login failed: ${e.message}"
                 }
-                Log.e("EmpowerSWR", "Login error: ${e.message}", e)
+                Timber.e(e, "Login failed")
             }
         }
     }
@@ -210,15 +189,13 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             try {
                 api.updateFcmToken(workerId, fcmToken)
-                Log.d("EmpowerSWR", "FCM token updated for workerId: $workerId")
             } catch (e: Exception) {
-                Log.e("EmpowerSWR", "Failed to update FCM token: ${e.message}", e)
+                Timber.e(e, "Failed to update FCM token")
             }
         }
     }
 
     fun setToken(token: String?) {
-        Log.d("EmpowerSWR", "setToken - Setting token: $token")
         if (token != null && isValidJwt(token)) {
             _token.value = token
             val expiry = (System.currentTimeMillis() / 1000) + 24 * 60 * 60 // 24 hours
@@ -227,7 +204,6 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
             fetchHistory()
             fetchAlerts()
         } else {
-            Log.w("EmpowerSWR", "Invalid or null token, clearing")
             PrefsHelper.clearToken(getApplication())
             _token.value = null
             _workerDetails.value = null
@@ -237,7 +213,6 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun setNotificationFromIntent(title: String?, body: String?) {
-        Log.d("EmpowerSWR", "setNotificationFromIntent - Setting: $title: $body")
         _notificationFromIntent.value = title to body
     }
 
@@ -249,35 +224,29 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val token = _token.value ?: throw IllegalStateException("No token available")
-                Log.d("EmpowerSWR", "fetchWorkerDetails - Sending token: $token")
                 val response = api.getWorkerDetails(token)
                 _workerDetails.value = response
                 PrefsHelper.saveWorkerDetails(getApplication(), response.firstName, response.surname)
-                Log.d("EmpowerSWR", "fetchWorkerDetails - Success: ${response.firstName ?: "Unknown"} ${response.surname ?: "Unknown"}, notices=${response.notices}")
                 onError?.invoke(null)
             } catch (e: Exception) {
-                Log.e("EmpowerSWR", "fetchWorkerDetails error: ${e.message}", e)
+                Timber.e(e, "Failed to fetch worker details")
                 onError?.invoke(e)
                 if (e.message?.contains("Invalid JWT") == true) {
                     logout()
                 }
-                // Do not set _workerDetails.value = null -- keep old data
             }
         }
     }
-
 
     fun fetchHistory(onError: ((Throwable) -> Unit)? = null) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val workerId = PrefsHelper.getWorkerId(getApplication())
                     ?: throw IllegalStateException("No workerId available")
-                Log.d("EmpowerSWR", "fetchHistory - Sending workerId: $workerId")
                 val response = api.getWorkerHistory(workerId)
                 _history.value = response
-                Log.d("EmpowerSWR", "fetchHistory - Success, history count: ${response.size}")
             } catch (e: Exception) {
-                Log.e("EmpowerSWR", "fetchHistory error: ${e.message}", e)
+                Timber.e(e, "Failed to fetch history")
                 _history.value = emptyList()
                 onError?.invoke(e)
             }
@@ -288,18 +257,20 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val token = _token.value ?: throw IllegalStateException("No token available")
-                Log.d("EmpowerSWR", "fetchAlerts - sending token: $token")
                 val response = api.getAlerts(token)
                 _alerts.value = response
-                Log.d("EmpowerSWR", "fetchAlerts - Success, alerts count: ${response.size}")
             } catch (e: Exception) {
-                Log.e("EmpowerSWR", "fetchAlerts error: ${e.message}", e)
+                Timber.e(e, "Failed to fetch alerts")
                 _alerts.value = emptyList()
                 if (e.message?.contains("Invalid JWT") == true) {
                     logout()
                 }
             }
         }
+    }
+
+    fun removeAlert(alert: Alert) {
+        _alerts.value = _alerts.value.toMutableList().apply { remove(alert) }
     }
 
     fun checkIn(phone: String) {
@@ -309,25 +280,20 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
                     throw IllegalArgumentException("Phone number must be 7-15 digits")
                 }
                 val token = _token.value ?: throw IllegalStateException("No token available")
-                Log.d("EmpowerSWR", "checkIn - Sending token: $token, phone: $phone")
                 val response = api.checkIn(token, CheckInRequest(phone))
                 _checkInSuccess.value = response.success
                 _checkInError.value = response.message ?: if (response.success) "Check-in successful" else "Check-in failed"
                 if (response.success) {
                     fetchWorkerDetails()
                 }
-                Log.d("EmpowerSWR", "checkIn - Success: ${response.success}, Message: ${response.message}")
             } catch (e: Exception) {
                 val errorMessage = when (e) {
-                    is HttpException -> {
-                        val responseBody = e.response()?.errorBody()?.string() ?: "No response body"
-                        "HTTP ${e.code()}: ${e.message()}, Body: $responseBody"
-                    }
+                    is HttpException -> "HTTP ${e.code()}: ${e.message()}"
                     else -> e.message ?: "Unknown error"
                 }
                 _checkInError.value = "Check-in failed: $errorMessage"
                 _checkInSuccess.value = false
-                Log.e("EmpowerSWR", "checkIn error: $errorMessage", e)
+                Timber.e(e, "Check-in failed")
                 if (errorMessage.contains("Invalid JWT")) {
                     logout()
                 }
@@ -339,15 +305,12 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val token = _token.value ?: throw IllegalStateException("No token available")
-                Log.d("EmpowerSWR", "saveLocation - Sending token: $token, worker_id: $workerId, latitude: $latitude, longitude: $longitude, action: $action")
                 val response = api.saveLocation(token, LocationRequest(worker_id = workerId, latitude = latitude, longitude = longitude, action = action))
-                if (response.success) {
-                    Log.d("EmpowerSWR", "saveLocation - Success: Location saved/updated for worker_id: $workerId, action: $action")
-                } else {
-                    Log.e("EmpowerSWR", "saveLocation - Failed: ${response.message}")
+                if (!response.success) {
+                    Timber.e("Failed to save location: ${response.message}")
                 }
             } catch (e: Exception) {
-                Log.e("EmpowerSWR", "saveLocation error: ${e.message}", e)
+                Timber.e(e, "Failed to save location")
             }
         }
     }
@@ -355,11 +318,9 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
     fun clearCheckInState() {
         _checkInSuccess.value = null
         _checkInError.value = null
-        Log.d("EmpowerSWR", "clearCheckInState - Cleared check-in states")
     }
 
     fun logout() {
-        Log.d("EmpowerSWR", "logout - Clearing token")
         _token.value = null
         _loginError.value = null
         _workerDetails.value = null
@@ -373,7 +334,7 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         PrefsHelper.clearPrefs(getApplication())
     }
 
-    //Edit Profile Functions
+    // Edit Profile Functions
 
     fun updatePreferredName(newName: String, callback: (Boolean, String?) -> Unit) {
         val currentWorker = _workerDetails.value ?: return callback(false, "No worker data")
@@ -391,13 +352,12 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
                 )
                 withContext(Dispatchers.Main) {
                     _workerDetails.value = response
-                    _pendingFields.value = response.pendingFields?.toSet() ?: emptySet()  // Sync from response, not manual +
+                    _pendingFields.value = response.pendingFields?.toSet() ?: emptySet()
                 }
                 callback(true, null)
-                Log.d("EmpowerSWR", "Submitted prefName change for review")
             } catch (e: Exception) {
+                Timber.e(e, "Failed to update preferred name")
                 callback(false, e.message)
-                Log.e("EmpowerSWR", "Submit prefName error: ${e.message}", e)
             }
         }
     }
@@ -418,16 +378,16 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
                 )
                 withContext(Dispatchers.Main) {
                     _workerDetails.value = response
-                    _pendingFields.value = _pendingFields.value + "contacts"  // Safe on main
+                    _pendingFields.value = _pendingFields.value + "contacts"
                 }
                 callback(true, null)
-                Log.d("EmpowerSWR", "Submitted contact changes for review")
             } catch (e: Exception) {
+                Timber.e(e, "Failed to update contact info")
                 callback(false, e.message)
-                Log.e("EmpowerSWR", "Submit contacts error: ${e.message}", e)
             }
         }
     }
+
     fun updatePassportDetails(
         firstName: String,
         surname: String,
@@ -459,27 +419,26 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
                 )
                 withContext(Dispatchers.Main) {
                     _workerDetails.value = response
-                    _pendingFields.value = _pendingFields.value + "passport"  // Optional if pending badge needed
+                    _pendingFields.value = _pendingFields.value + "passport"
                 }
                 callback(true, null)
-                Log.d("EmpowerSWR", "Updated passport details")
             } catch (e: Exception) {
+                Timber.e(e, "Failed to update passport details")
                 callback(false, e.message)
-                Log.e("EmpowerSWR", "Update passport error: ${e.message}", e)
             }
         }
     }
+
     fun fetchFlightDetails(workerId: String, onError: (Throwable?) -> Unit) {
         val currentToken = _token.value
         if (currentToken == null) {
-            Log.e("EmpowerSWR", "fetchFlightDetails - No token available")
             _flightError.value = "Authentication error. Please log in again."
+            Timber.e("No token available for fetching flight details")
             onError(IllegalStateException("No token available"))
             return
         }
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                Log.d("EmpowerSWR", "fetchFlightDetails - Sending workerId: $workerId, token: $currentToken")
                 val response = api.getFlightDetails(workerId, currentToken)
                 withContext(Dispatchers.Main) {
                     _flightDetails.value = response
@@ -487,12 +446,12 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
                     onError(null)
                 }
             } catch (e: HttpException) {
-                Log.e("EmpowerSWR", "Error fetching flight details: ${e.message}")
+                Timber.e(e, "Failed to fetch flight details")
                 withContext(Dispatchers.Main) {
                     val errorMessage = when (e.code()) {
                         404 -> {
-                            val errorBody = e.response()?.errorBody()?.string()
                             try {
+                                val errorBody = e.response()?.errorBody()?.string()
                                 val errorJson = errorBody?.let { JSONObject(it) }
                                 if (errorJson?.optString("error") == "No flight details found") {
                                     "No flights scheduled at this time. Please check back later."
@@ -510,7 +469,7 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
                     onError(e)
                 }
             } catch (e: Exception) {
-                Log.e("EmpowerSWR", "Error fetching flight details: ${e.message}")
+                Timber.e(e, "Failed to fetch flight details")
                 withContext(Dispatchers.Main) {
                     _flightError.value = when (e) {
                         is UnknownHostException -> "Network error. Please check your connection and try again."
@@ -526,17 +485,15 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
     fun fetchPdbDetails(workerId: String, onError: (Throwable?) -> Unit) {
         val currentToken = _token.value
         if (currentToken == null) {
-            Log.e("EmpowerSWR", "fetchPdbDetails - No token available")
+            Timber.e("No token available for fetching PDB details")
             _pdbError.value = "Authentication error. Please log in again."
             onError(IllegalStateException("No token available"))
             return
         }
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                Log.d("EmpowerSWR", "fetchPdbDetails - Sending workerId: $workerId, token: $currentToken")
                 val response = api.getPdbDetails(workerId, currentToken)
                 withContext(Dispatchers.Main) {
-                    // Check if the response is effectively "empty" (most fields are null)
                     if (response.startDate == null && response.endDate == null && response.pdbLocationLong == null) {
                         _pdbDetails.value = null
                         _pdbError.value = "No pre-departure details available at this time. Please check back later."
@@ -548,7 +505,7 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
             } catch (e: HttpException) {
-                Log.e("EmpowerSWR", "Error fetching PDB details: ${e.message}")
+                Timber.e(e, "Failed to fetch PDB details")
                 withContext(Dispatchers.Main) {
                     val errorMessage = when (e.code()) {
                         401 -> "Authentication error. Please log in again."
@@ -559,7 +516,7 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
                     onError(e)
                 }
             } catch (e: Exception) {
-                Log.e("EmpowerSWR", "Error fetching PDB details: ${e.message}")
+                Timber.e(e, "Failed to fetch PDB details")
                 withContext(Dispatchers.Main) {
                     _pdbError.value = when (e) {
                         is UnknownHostException -> "Network error. Please check your connection and try again."
@@ -571,20 +528,19 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
             }
         }
     }
+
     fun updatePdbStatus(workerId: String, onResult: (Boolean, String?) -> Unit) {
         viewModelScope.launch {
             try {
                 val currentToken = _token.value
                 if (currentToken == null) {
-                    Log.e("EmpowerSWR", "updatePdbStatus - No token available")
+                    Timber.e("No token available for updating PDB status")
                     onResult(false, "No token available")
                     return@launch
                 }
-                Log.d("EmpowerSWR", "updatePdbStatus - Sending workerId: $workerId, token: $currentToken")
                 val response = api.updatePdbStatus(workerId, currentToken)
                 withContext(Dispatchers.Main) {
                     if (response.success) {
-                        // Refresh PDB details to reflect updated status
                         fetchPdbDetails(workerId) { error ->
                             if (error != null) {
                                 onResult(false, "Failed to refresh PDB details: ${error.message}")
@@ -598,7 +554,7 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
             } catch (e: Exception) {
-                Log.e("EmpowerSWR", "Update PDB status error: ${e.message}")
+                Timber.e(e, "Failed to update PDB status")
                 withContext(Dispatchers.Main) {
                     onResult(false, e.message)
                 }
@@ -611,15 +567,13 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
             try {
                 val currentToken = _token.value
                 if (currentToken == null) {
-                    Log.e("EmpowerSWR", "updatePdbInternalStatus - No token available")
+                    Timber.e("No token available for updating internal PDB status")
                     onResult(false, "No token available")
                     return@launch
                 }
-                Log.d("EmpowerSWR", "updatePdbInternalStatus - Sending workerId: $workerId, token: $currentToken")
                 val response = api.updatePdbInternalStatus(workerId, currentToken)
                 withContext(Dispatchers.Main) {
                     if (response.success) {
-                        // Refresh PDB details to reflect updated status
                         fetchPdbDetails(workerId) { error ->
                             if (error != null) {
                                 onResult(false, "Failed to refresh PDB details: ${error.message}")
@@ -633,24 +587,24 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
             } catch (e: Exception) {
-                Log.e("EmpowerSWR", "Update internal PDB status error: ${e.message}")
+                Timber.e(e, "Failed to update internal PDB status")
                 withContext(Dispatchers.Main) {
                     onResult(false, e.message)
                 }
             }
         }
     }
+
     fun updateFlightStatus(workerId: String, onResult: (Boolean, String?) -> Unit) {
         val currentToken = _token.value
         if (currentToken == null) {
-            Log.e("EmpowerSWR", "updateFlightStatus - No token available")
+            Timber.e("No token available for updating flight status")
             onResult(false, "No token available")
             return
         }
         viewModelScope.launch {
             try {
-                val response = api.updateFlightStatus(workerId, currentToken) // Assume this endpoint exists
-                Log.d("EmpowerSWR", "Update flight status response: $response")
+                val response = api.updateFlightStatus(workerId, currentToken)
                 if (response.success) {
                     fetchFlightDetails(workerId) { error ->
                         if (error != null) {
@@ -663,20 +617,20 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
                     onResult(false, response.message)
                 }
             } catch (e: Exception) {
-                Log.e("EmpowerSWR", "Update flight status error: ${e.message}")
+                Timber.e(e, "Failed to update flight status")
                 onResult(false, e.message)
             }
         }
     }
+
     fun fetchDirectory(token: String, workerId: String) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                Log.d("EmpowerSWR", "fetchDirectory - Sending token: $token, workerId: $workerId")
                 val entries = api.getDirectory(token, workerId)
                 _directoryEntries.value = entries
             } catch (e: Exception) {
+                Timber.e(e, "Failed to fetch directory")
                 _directoryEntries.value = emptyList()
-                Log.e("EmpowerSWR", "Fetch directory error: ${e.message}")
                 if (e is HttpException && e.message?.contains("Invalid JWT") == true) {
                     logout()
                 }
@@ -684,4 +638,76 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun fetchTeams(token: String, workerId: String, limit: Int = 50, offset: Int = 0) {
+        viewModelScope.launch {
+            try {
+                val teams = api.getTeams(token, workerId, limit, offset)
+                _teamEntries.value = teams.filter { it.teamName != null && it.teamName.isNotEmpty() }
+                _teamEntries.value.forEach { team ->
+                    fetchTeamLocations(token, workerId, team.teamId)
+                }
+            } catch (e: HttpException) {
+                Timber.e(e, "Failed to fetch teams")
+                throw e
+            } catch (e: JsonParseException) {
+                Timber.e(e, "Failed to parse teams response")
+                throw e
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to fetch teams")
+                throw e
+            }
+        }
+    }
+
+    private fun fetchTeamLocations(token: String, workerId: String, teamId: Int) {
+        viewModelScope.launch {
+            try {
+                val locations = api.getTeamLocations(token, workerId, teamId)
+                _teamLocations.value = _teamLocations.value.toMutableMap().apply {
+                    put(teamId, locations)
+                }
+            } catch (e: HttpException) {
+                Timber.e(e, "Failed to fetch locations for team $teamId")
+            } catch (e: JsonParseException) {
+                Timber.e(e, "Failed to parse locations response for team $teamId")
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to fetch locations for team $teamId")
+            }
+        }
+    }
+
+    suspend fun submitFeedback(token: String, workerId: String, teamId: Int, feedbackText: String) {
+        val body = mapOf(
+            "teamId" to teamId,
+            "feedbackText" to feedbackText
+        )
+        val response = api.submitFeedback(token, workerId, body)
+        if (!response.isSuccessful) {
+            throw HttpException(response)
+        }
+    }
+
+    suspend fun acceptApplication(token: String, workerId: String) {
+        val body = mapOf("workerId" to workerId)
+        val response = api.acceptApplication(token, body)
+        if (!response.isSuccessful) {
+            throw HttpException(response)
+        }
+    }
+
+    suspend fun fetchNotices(token: String, workerId: String) {
+        try {
+            val response = api.getNotices(token, workerId)
+            if (response.isSuccessful) {
+                val body = response.body()
+                _notices.value = body?.get("notices")
+            } else {
+                Timber.e("Failed to fetch notices: HTTP ${response.code()}")
+                throw HttpException(response)
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to fetch notices")
+            _notices.value = null
+        }
+    }
 }

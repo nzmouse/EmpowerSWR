@@ -1,29 +1,32 @@
 [versions]
 agp = "8.11.1"
 coil-compose = "2.7.0"
-converter-gson = "2.9.0"
 jackson-core = "2.19.2"
-kotlin = "2.2.0"
-core-ktx = "1.16.0"
+kotlin = "2.2.10"
+core-ktx = "1.17.0"
 activity-compose = "1.10.1"
-lifecycle = "2.9.1"
+lifecycle = "2.9.3"
 coroutines = "1.10.2"
 material = "1.12.0"
 retrofit = "3.0.0" # Note: Your version; 2.11.0 was used earlier
 gson = "2.13.1"
 okhttp = "5.1.0" # Note: Your version; 4.12.0 was used earlier
-firebase-bom = "33.16.0"
-s3 = "2.32.19"
-security-crypto = "1.0.0"
-navigation = "2.9.1"
-compose-bom = "2025.06.01"
-media3-exoplayer = "1.7.1"
+firebase-bom = "34.2.0"
+s3 = "2.32.29"
+security-crypto = "1.1.0"
+navigation = "2.9.3"
+compose-bom = "2025.08.01"
+media3-exoplayer = "1.8.0"
 java-jwt = "4.5.0"
 mlkit-document-scanner = "16.0.0-beta1"
 play-services-location = "21.3.0"
 pdf-viewer = "3.2.0-beta.1"
 signature-pad = "1.3.1"
 itext7-core = "9.2.0"
+appcompat = "1.7.1"
+timber = "5.0.1"
+firebaseCrashlyticsPlugin = "3.0.6" # Correct plugin version
+firebaseCrashlyticsLib = "20.0.1" # Library version
 
 [libraries]
 # Core Android
@@ -33,7 +36,7 @@ androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = 
 androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigation" }
 
 # Jetpack Compose (managed by BOM)
-androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "compose-bom" }
+androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "compose-bom" }
 androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
 androidx-compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
 androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }
@@ -42,7 +45,7 @@ androidx-compose-runtime-livedata = { group = "androidx.compose.runtime", name =
 androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
 androidx-compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
 androidx-compose-foundation = { group = "androidx.compose.foundation", name = "foundation" }
-androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activity-compose" }
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity-compose" }
 
 # Lifecycle
 androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }
@@ -50,7 +53,6 @@ androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecyc
 
 # Coroutines
 coil-compose = { module = "io.coil-kt:coil-compose", version.ref = "coil-compose" }
-converter-gson-v290 = { module = "com.squareup.retrofit2:converter-gson", version.ref = "converter-gson" }
 jackson-core = { module = "com.fasterxml.jackson.core:jackson-core", version.ref = "jackson-core" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 
@@ -69,8 +71,8 @@ okhttp-logging-interceptor = { group = "com.squareup.okhttp3", name = "logging-i
 
 # Firebase
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebase-bom" }
-firebase-messaging-ktx = { group = "com.google.firebase", name = "firebase-messaging-ktx" }
-firebase-analytics-ktx = { group = "com.google.firebase", name = "firebase-analytics-ktx" }
+firebase-messaging-ktx = { group = "com.google.firebase", name = "firebase-messaging" }
+firebase-analytics-ktx = { group = "com.google.firebase", name = "firebase-analytics" }
 
 # Security
 androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "security-crypto" }
@@ -87,11 +89,17 @@ mlkit-document-scanner = { group = "com.google.android.gms", name = "play-servic
 play-services-location = { group = "com.google.android.gms", name = "play-services-location", version.ref = "play-services-location" }
 
 #Signing libraries
+
 pdf-viewer = { group = "com.github.barteksc", name = "android-pdf-viewer", version.ref = "pdf-viewer" }
 s3 = { module = "software.amazon.awssdk:s3", version.ref = "s3" }
 signature-pad = { group = "com.github.gcacace", name = "signature-pad", version.ref = "signature-pad" }
 itext7-core = { group = "com.itextpdf.android", name = "itext7-core-android", version.ref = "itext7-core" } # Updated name
 
+#Compatibility
+timber = { module = "com.jakewharton.timber:timber", version.ref = "timber" }
+
+#analytics
+firebase-crashlytics = { module = "com.google.firebase:firebase-crashlytics", version.ref = "firebaseCrashlyticsLib" }
 [bundles]
 retrofit = ["retrofit", "retrofit-converter-gson", "retrofit-converter-scalars", "gson"]
 okhttp = ["okhttp", "okhttp-logging-interceptor"]
@@ -103,3 +111,4 @@ android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 google-services = { id = "com.google.gms.google-services", version = "4.4.3" }
+firebase-crashlytics = { id = "com.google.firebase.crashlytics", version.ref = "firebaseCrashlyticsPlugin" }

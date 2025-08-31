@@ -18,14 +18,14 @@ import com.empowerswr.luksave.EmpowerViewModel
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Locale
-import android.util.Log
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import timber.log.Timber
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditPassportScreen(viewModel: EmpowerViewModel, navController: NavHostController) {
     val workerDetails by viewModel.workerDetails
-    val context = LocalContext.current
+    LocalContext.current
     var firstName by remember { mutableStateOf(workerDetails?.firstName ?: "") }
     var surname by remember { mutableStateOf(workerDetails?.surname ?: "") }
     var passportNumber by remember { mutableStateOf("") } // Start empty
@@ -148,7 +148,7 @@ fun EditPassportScreen(viewModel: EmpowerViewModel, navController: NavHostContro
                                 },
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .menuAnchor(),
+                                    .menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = true),
                                 textStyle = TextStyle(
                                     fontWeight = if (province.isNotBlank()) FontWeight.Bold else FontWeight.Normal
                                 )
@@ -203,7 +203,7 @@ fun EditPassportScreen(viewModel: EmpowerViewModel, navController: NavHostContro
                         val formattedExpiry = try {
                             val date = inputFormat.parse(dateExpiry)
                             outputFormat.format(date!!)
-                        } catch (e: Exception) {
+                        } catch (_: Exception) {
                             coroutineScope.launch {
                                 snackbarHostState.showSnackbar("Invalid Date Expiry format. Use dd MMM YYYY with valid date")
                             }
@@ -219,14 +219,12 @@ fun EditPassportScreen(viewModel: EmpowerViewModel, navController: NavHostContro
                                     val expiryYear = formattedExpiry.take(4)
                                     val yy = expiryYear.takeLast(2)
                                     val route = "documents?type=passport&expiryYY=$yy&from=passport"
-                                    Log.d("EmpowerSWR", "Navigating to $route")
-                                    Log.d("EmpowerSWR", "Current destination: ${navController.currentDestination?.route}")
                                     try {
                                         navController.navigate(route) {
                                             launchSingleTop = true
                                         }
                                     } catch (e: Exception) {
-                                        Log.e("EmpowerSWR", "Navigation failed: ${e.message}", e)
+                                        Timber.tag("EditPassportScreen").e(e,"Navigation failed")
                                         snackbarHostState.showSnackbar("Navigation error: ${e.message}")
                                     }
                                 } else {
