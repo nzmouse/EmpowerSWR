@@ -1,89 +1,111 @@
+
 plugins {
-    id("com.android.application")
-    id("org.jetbrains.kotlin.android")
-    id("org.jetbrains.kotlin.plugin.compose") version "2.0.21"
-    id("com.google.gms.google-services") version "4.4.2"
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.google.services)
+    id("com.google.firebase.crashlytics")
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
 }
 
 android {
-    namespace = "com.empowerswr.test"
-    compileSdk = 35
+    namespace = "com.empowerswr.luksave"
+    compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.empowerswr.test"
-        minSdk = 24
-        //noinspection OldTargetApi
-        targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        applicationId = "com.empowerswr.luksave"
+        minSdk = 26
+        targetSdk = 36
+        versionCode = 2
+        versionName = "1.0.0"
     }
-
-    buildTypes {
-        release {
-            isMinifyEnabled = false
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+    signingConfigs {
+        create("release") {
+            storeFile = file(properties["RELEASE_STORE_FILE"] as String? ?: "C:/Users/SOWMi/AndroidStudioProjects/Luksave/keystore.jks")
+            storePassword = properties["RELEASE_STORE_PASSWORD"] as String? ?: "your-password"
+            keyAlias = properties["RELEASE_KEY_ALIAS"] as String? ?: "your-alias"
+            keyPassword = properties["RELEASE_KEY_PASSWORD"] as String? ?: "your-password"
         }
     }
+    buildTypes {
+        release {
+            signingConfig = signingConfigs.getByName("release")
+            isMinifyEnabled = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+        debug {
+            isDebuggable = true
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
+
     buildFeatures {
         compose = true
     }
-    composeOptions {
-        kotlinCompilerExtensionVersion = "2.0.21" // Matches Kotlin version
+
+
+    ndkVersion = "29.0.13599879-rc2"
+
+    packaging {
+        resources {
+            excludes.addAll(listOf(
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE",
+                "META-INF/NOTICE",
+                "META-INF/ASL2.0",
+                "META-INF/LGPL2.1",
+                "META-INF/FastDoubleParser-LICENSE",
+                "META-INF/io.netty.versions.properties",
+                "META-INF/INDEX.LIST"
+            ))
+        }
     }
+
 }
 
 dependencies {
-    // Core Android
-    implementation(libs.androidx.core.ktx)
-
-    // Jetpack Compose
-    implementation(platform(libs.androidx.compose.bom)) // Must be present
+    implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
-    implementation(libs.material3)
-    implementation(libs.ui)
-    implementation(libs.androidx.runtime)
-    implementation(libs.androidx.runtime.livedata)
-    implementation(libs.ui.tooling.preview)
-    debugImplementation(libs.ui.tooling)
-    implementation(libs.androidx.foundation)
-
-    // material extras
-    implementation(libs.material.icons.extended)
-    // Lifecycle and ViewModel for Compose
+    implementation(libs.bundles.compose)
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)
-
-    // Coroutines
     implementation(libs.kotlinx.coroutines.android)
-
-    // Retrofit for API calls
-    implementation(libs.retrofit)
-    implementation(libs.converter.gson)
-    implementation(libs.gson)
-    // OkHttp for timeouts and logging
-    implementation(libs.okhttp)
-    implementation(libs.logging.interceptor)
-
-    // Firebase for push notifications
+    implementation(libs.bundles.retrofit)
+    implementation(libs.bundles.okhttp)
+    if (android.buildTypes.getByName("debug").isDebuggable) {
+        implementation(libs.okhttp.logging.interceptor)
+    }
     implementation(platform(libs.firebase.bom))
-    implementation(libs.firebase.messaging.ktx)
-    implementation(libs.firebase.analytics.ktx)
-
-    // Encryption for secure storage
+    implementation(libs.bundles.firebase)
     implementation(libs.androidx.security.crypto)
-
-    //JWT library for token extraction
+    implementation(libs.androidx.media3.exoplayer)
     implementation(libs.java.jwt)
-
-    //navigation
-    implementation(libs.androidx.navigation.compose)
-
-    //retrofit
+    implementation(libs.material)
+    implementation(libs.androidx.compose.material.icons.extended)
+    implementation(libs.retrofit.converter.gson)
+    implementation(libs.retrofit.converter.scalars)
+    implementation(libs.mlkit.document.scanner)
+    implementation(libs.play.services.location)
+    implementation(libs.pdf.viewer)
+    implementation(libs.signature.pad)
+    implementation(libs.itext7.core)
+    debugImplementation(libs.androidx.compose.ui.tooling)
+    implementation(libs.coil.compose)
+    implementation(libs.s3) {
+        exclude(group = "software.amazon.awssdk", module = "third-party-jackson-core")
+    }
+    implementation(libs.jackson.core)
+    implementation(libs.timber)
+    implementation(libs.firebase.crashlytics)
 }

@@ -1,14 +1,11 @@
-buildscript {
-    repositories {
-        google()
-        mavenCentral()
-    }
-    dependencies {
-        classpath("com.android.tools.build:gradle:8.10.1")
-        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.0.21")
-    }
-}
+plugins {
 
-tasks.register("clean", Delete::class) {
-    delete(rootProject.layout.buildDirectory.get().asFile) // Updated to use modern API
+    alias(libs.plugins.android.application) apply false
+    alias(libs.plugins.kotlin.android) apply false
+    alias(libs.plugins.kotlin.compose) apply false
+    alias(libs.plugins.google.services) apply false
+    alias(libs.plugins.firebase.crashlytics) apply false
+}
+tasks.register<Delete>("clean") {
+    delete(project.layout.buildDirectory)
 }
