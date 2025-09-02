@@ -168,10 +168,8 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIntent(intent: Intent?, viewModel: EmpowerViewModel) {
         intent?.extras?.let { extras ->
-            Timber.i("Intent extras: $extras")
             val title = extras.getString("notification_title") ?: extras.getString("gcm.notification.title") ?: "No Title"
             val body = extras.getString("notification_body") ?: extras.getString("gcm.notification.body") ?: "No Body"
-            Timber.i("Notification Data - Title: $title, Body: $body")
             viewModel.setNotificationFromIntent(title, body)
         } ?: run {
             Timber.i("No notification data in intent")
@@ -297,11 +295,7 @@ fun NavigationSetup(viewModel: EmpowerViewModel) {
             confirmButton = {
                 TextButton(
                     onClick = {
-                        Timber.d("Feedback Values: text='%s', token='%s', workerId='%s', screen='%s'", feedbackText, token, workerId, currentDestination)
-
-
                         if (feedbackText.isNotBlank() && token != null && workerId.isNotEmpty()) {
-                            Timber.d("Submitting feedback: text='%s', token='%s', workerId='%s', screen='%s'", feedbackText, token, workerId, currentDestination)
                             isLoading = true
                             coroutineScope.launch {
                                 try {
@@ -333,7 +327,6 @@ fun NavigationSetup(viewModel: EmpowerViewModel) {
                                 }
                             }
                         } else {
-                            Timber.w("Feedback submission blocked: text='%s', token=%s, workerId='%s'", feedbackText, token != null, workerId)
                             coroutineScope.launch {
                                 snackbarHostState.showSnackbar("Please enter feedback text")
                             }

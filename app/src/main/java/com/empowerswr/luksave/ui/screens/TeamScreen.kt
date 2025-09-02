@@ -1043,18 +1043,15 @@ fun formatDate(
 
 private fun calculateDuration(startDateString: String?, endDateString: String?): String {
     try {
-        Timber.tag("TeamCard").d("Calculating duration: start=$startDateString, end=$endDateString")
         var startDate: Date? = null
         var endDate: Date? = null
         inputFormats.forEach { format ->
             try {
                 if (startDate == null && startDateString != null && startDateString != "0000-00-00" && startDateString.isNotBlank()) {
                     startDate = format.parse(startDateString)
-                    Timber.tag("TeamCard").d("Parsed start date: $startDateString -> $startDate, timezone ${format.timeZone.id}")
                 }
                 if (endDate == null && endDateString != null && endDateString != "0000-00-00" && endDateString.isNotBlank()) {
                     endDate = format.parse(endDateString)
-                    Timber.tag("TeamCard").d("Parsed end date: $endDateString -> $endDate, timezone ${format.timeZone.id}")
                 }
                 if (startDate != null && endDate != null) return@forEach
             } catch (e: Exception) {
@@ -1075,7 +1072,6 @@ private fun calculateDuration(startDateString: String?, endDateString: String?):
                 months == 0 -> "$weeks week${if (weeks > 1) "s" else ""}"
                 else -> "$months month${if (months > 1) "s" else ""}, $weeks week${if (weeks > 1) "s" else ""}"
             }
-            Timber.tag("TeamCard").d("Duration calculated: $result")
             return result
         } else {
             Timber.tag("TeamCard").w("Start or end date is null or invalid: start=$startDate, end=$endDate")
@@ -1098,11 +1094,9 @@ private fun formatDateFlexible(dateString: String?): String {
     }
     inputFormats.forEach { format ->
         try {
-            Timber.tag("TeamCard").d("Trying to format date: $dateString with pattern ${format.toPattern()}, timezone ${format.timeZone.id}")
             val date = format.parse(dateString)
             if (date != null) {
                 val formatted = outputFormat.format(date)
-                Timber.tag("TeamCard").d("Formatted date: $dateString -> $formatted")
                 return formatted
             }
         } catch (e: Exception) {

@@ -298,7 +298,7 @@ fun RegistrationScreen(
             OutlinedTextField(
                 value = pin,
                 onValueChange = { newValue -> pin = newValue.take(4) },
-                label = { Text("4-Digit PIN") },
+                label = { Text("Choose a 4-Digit PIN") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
