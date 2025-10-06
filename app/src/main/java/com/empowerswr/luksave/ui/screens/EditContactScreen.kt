@@ -9,6 +9,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
@@ -28,7 +29,7 @@ fun EditContactScreen(viewModel: EmpowerViewModel, navController: NavHostControl
     val coroutineScope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
     val scrollState = rememberScrollState()
-
+    val context = LocalContext.current
     Scaffold(
         topBar = {
             TopAppBar(
@@ -100,9 +101,9 @@ fun EditContactScreen(viewModel: EmpowerViewModel, navController: NavHostControl
                         focusManager.clearFocus()  // Dismiss keyboard on submit
                         if (primaryPhone.isNotBlank()) {
                             isSaving = true
-                            viewModel.updateContactInfo(primaryPhone, secondaryPhone, aunzPhone, email) { success, error ->
-                                isSaving = false
+                            viewModel.updateContactInfo(primaryPhone, secondaryPhone, aunzPhone, email, context) { success, error ->
                                 coroutineScope.launch {
+                                    isSaving = false
                                     if (success) {
                                         snackbarHostState.showSnackbar("Submitted for review")
                                         navController.previousBackStackEntry?.savedStateHandle?.set("refresh_profile", true)
@@ -120,7 +121,15 @@ fun EditContactScreen(viewModel: EmpowerViewModel, navController: NavHostControl
                     },
                     enabled = !isSaving
                 ) {
-                    if (isSaving) CircularProgressIndicator(modifier = Modifier.size(24.dp)) else Text("Save")
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (isSaving) {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                        }
+                        Text("Save")
+                    }
                 }
             }
         }

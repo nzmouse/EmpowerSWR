@@ -37,7 +37,7 @@ fun EditPassportScreen(viewModel: EmpowerViewModel, navController: NavHostContro
     val coroutineScope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
     val scrollState = rememberScrollState()
-
+    val context = LocalContext.current
     // Province options
     val provinceOptions = listOf("TORBA", "SANMA", "PENAMA", "MALAMPA", "SHEFA", "TAFEA")
     var expanded by remember { mutableStateOf(false) }
@@ -210,10 +210,11 @@ fun EditPassportScreen(viewModel: EmpowerViewModel, navController: NavHostContro
                             return@Button
                         }
                         isSaving = true
-                        viewModel.updatePassportDetails(firstName, surname, passportNumber, birthPlace, formattedExpiry, province) { success, error ->
+
+                        viewModel.updatePassportDetails(firstName, surname, passportNumber, birthPlace, formattedExpiry, province, context) { isSuccess, error ->
                             isSaving = false
                             coroutineScope.launch {
-                                if (success) {
+                                if (isSuccess) {
                                     snackbarHostState.showSnackbar("Updated successfully")
                                     navController.previousBackStackEntry?.savedStateHandle?.set("refresh_profile", true)
                                     val expiryYear = formattedExpiry.take(4)
@@ -224,7 +225,7 @@ fun EditPassportScreen(viewModel: EmpowerViewModel, navController: NavHostContro
                                             launchSingleTop = true
                                         }
                                     } catch (e: Exception) {
-                                        Timber.tag("EditPassportScreen").e(e,"Navigation failed")
+                                        Timber.tag("EditPassportScreen").e(e, "Navigation failed")
                                         snackbarHostState.showSnackbar("Navigation error: ${e.message}")
                                     }
                                 } else {
@@ -235,9 +236,13 @@ fun EditPassportScreen(viewModel: EmpowerViewModel, navController: NavHostContro
                     },
                     enabled = !isSaving,
                     content = {
-                        if (isSaving) {
-                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                        } else {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (isSaving) {
+                                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                            }
                             Text("Save")
                         }
                     }

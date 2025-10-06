@@ -35,8 +35,10 @@ import androidx.core.content.edit
 import androidx.core.net.toUri
 import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
+import com.empowerswr.luksave.PrefsHelper
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import timber.log.Timber
 
 @Composable
 fun LocationToggle(
@@ -78,7 +80,10 @@ fun LocationToggle(
             )
         }
     }
-
+    // Log screen usage
+    LaunchedEffect(Unit) {
+        Timber.i("ScreenUsage: LoginScreen displayed, workerId=${PrefsHelper.getWorkerId(context) ?: "unknown"}, timestamp=${System.currentTimeMillis()}")
+    }
     // Initialize state
     LaunchedEffect(Unit) {
         updateState()

@@ -1,26 +1,32 @@
 package com.empowerswr.luksave
 
 import android.app.Application
+import android.content.Context
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
 import com.google.gson.JsonParseException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.empowerswr.luksave.EmpowerApi
+import com.empowerswr.luksave.PdbUpdateResponse
 import org.json.JSONObject
 import retrofit2.HttpException
 import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
+import retrofit2.http.*
+import timber.log.Timber
 import java.net.UnknownHostException
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
-import timber.log.Timber
-import kotlinx.coroutines.flow.asStateFlow
 
 class EmpowerViewModel(application: Application) : AndroidViewModel(application) {
     private val _token = mutableStateOf<String?>(null)
@@ -44,6 +50,12 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
     private val _checkInError = mutableStateOf<String?>(null)
     val checkInError: State<String?> = _checkInError
 
+    private val _contractSuccess = mutableStateOf<Boolean?>(null)
+    val contractSuccess: State<Boolean?> = _contractSuccess
+
+    private val _contractError = mutableStateOf<String?>(null)
+    val contractError: State<String?> = _contractError
+
     private val _flightError = mutableStateOf<String?>(null)
     val flightError: State<String?> = _flightError
 
@@ -52,6 +64,32 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
 
     private val _notificationFromIntent = mutableStateOf(Pair<String?, String?>(null, null))
     val notificationFromIntent: State<Pair<String?, String?>> = _notificationFromIntent
+
+    private val _pendingFields = mutableStateOf<Set<String>>(emptySet())
+    val pendingFields: State<Set<String>> = _pendingFields
+
+    private val _flightDetails = mutableStateOf<FlightDetails?>(null)
+    val flightDetails: State<FlightDetails?> = _flightDetails
+
+    private val _pdbDetails = mutableStateOf<PdbDetails?>(null)
+    val pdbDetails: State<PdbDetails?> = _pdbDetails
+
+    private val _internalPdbDetails = mutableStateOf<PdbDetails?>(null)
+
+    private val _directoryEntries = MutableStateFlow<List<DirectoryEntry>>(emptyList())
+    val directoryEntries: StateFlow<List<DirectoryEntry>> = _directoryEntries.asStateFlow()
+
+    private val _pdbError = mutableStateOf<String?>(null)
+    val pdbError: State<String?> = _pdbError
+
+    private val _teamEntries = MutableStateFlow<List<Team>>(emptyList())
+    val teamEntries: StateFlow<List<Team>> = _teamEntries.asStateFlow()
+
+    private val _teamLocations = MutableStateFlow<Map<Int, List<TeamLocation>>>(emptyMap())
+    val teamLocations: StateFlow<Map<Int, List<TeamLocation>>> = _teamLocations.asStateFlow()
+
+    private val _notices = MutableStateFlow<String?>(null)
+    val notices: StateFlow<String?> = _notices.asStateFlow()
 
     private val logging = HttpLoggingInterceptor().apply {
         setLevel(HttpLoggingInterceptor.Level.BODY)
@@ -67,30 +105,11 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         .build()
     private val api = retrofit.create(EmpowerApi::class.java)
 
-    private val _pendingFields = mutableStateOf<Set<String>>(emptySet())
-    val pendingFields: State<Set<String>> = _pendingFields
+    private val _showUsernamePrompt = mutableStateOf(false)
+    val showUsernamePrompt: State<Boolean> get() = _showUsernamePrompt
 
-    private val _flightDetails = mutableStateOf<FlightDetails?>(null)
-    val flightDetails: State<FlightDetails?> = _flightDetails
-
-    private val _pdbDetails = mutableStateOf<PdbDetails?>(null)
-    val pdbDetails: State<PdbDetails?> = _pdbDetails
-
-    private val _internalPdbDetails = mutableStateOf<PdbDetails?>(null)
-
-    private val _directoryEntries = MutableStateFlow<List<DirectoryEntry>>(emptyList())
-    val directoryEntries: StateFlow<List<DirectoryEntry>> = _directoryEntries
-
-    private val _pdbError = mutableStateOf<String?>(null)
-
-    private val _teamEntries = MutableStateFlow<List<Team>>(emptyList())
-    val teamEntries: StateFlow<List<Team>> = _teamEntries.asStateFlow()
-
-    private val _teamLocations = MutableStateFlow<Map<Int, List<TeamLocation>>>(emptyMap())
-    val teamLocations: StateFlow<Map<Int, List<TeamLocation>>> = _teamLocations.asStateFlow()
-
-    private val _notices = MutableStateFlow<String?>(null)
-    val notices: StateFlow<String?> = _notices
+    private val _loginComplete = mutableStateOf(false)
+    val loginComplete: State<Boolean> get() = _loginComplete
 
     init {
         val savedToken = PrefsHelper.getToken(getApplication())
@@ -99,6 +118,11 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
             val currentTime = System.currentTimeMillis() / 1000
             if (savedTokenExpiry > currentTime && isValidJwt(savedToken)) {
                 _token.value = savedToken
+                viewModelScope.launch {
+                    fetchWorkerDetails(getApplication())
+                    fetchHistory(getApplication())
+                    fetchAlerts(getApplication())
+                }
             } else {
                 PrefsHelper.clearToken(getApplication())
                 _token.value = null
@@ -107,8 +131,10 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
 
         viewModelScope.launch {
             NotificationHandler.notificationFlow.collect { notificationData ->
-                val notification = Notification(notificationData.first ?: "", notificationData.second ?: "")
-                _notifications.value = _notifications.value.toMutableList().apply { add(notification) }
+                val notification =
+                    Notification(notificationData.first ?: "", notificationData.second ?: "")
+                _notifications.value =
+                    _notifications.value.toMutableList().apply { add(notification) }
             }
         }
     }
@@ -117,20 +143,27 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         return token.split(".").size == 3
     }
 
-    fun register(passport: String, surname: String, pin: String) {
+    fun register(
+        passport: String,
+        surname: String,
+        username: String,
+        pin: String,
+        context: Context
+    ) {
         viewModelScope.launch {
             try {
-                val request = RegistrationRequest(passport, surname, pin)
+                val request = RegistrationRequest(passport, surname, username, pin)
                 val response: Response<RegistrationResponse> = api.register(request)
                 val errorBody = response.errorBody()?.string()
                 if (response.isSuccessful) {
                     response.body()?.let { tokenResponse ->
                         _token.value = tokenResponse.token
-                        PrefsHelper.saveWorkerId(getApplication(), tokenResponse.workerId)
-                        PrefsHelper.saveToken(getApplication(), tokenResponse.token, tokenResponse.expiry)
-                        fetchWorkerDetails()
-                        fetchHistory()
-                        fetchAlerts()
+                        PrefsHelper.saveWorkerId(context, tokenResponse.workerId)
+                        PrefsHelper.saveToken(context, tokenResponse.token, tokenResponse.expiry)
+                        PrefsHelper.setRegistered(context, true)
+                        fetchWorkerDetails(context)
+                        fetchHistory(context)
+                        fetchAlerts(context)
                     }
                 } else {
                     val errorMessage = errorBody?.let {
@@ -160,51 +193,61 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun login(workerId: String, pin: String) {
+    fun login(workerIdOrUsername: String, pin: String, context: Context) {
         viewModelScope.launch {
             try {
-                val response = api.login(LoginRequest(workerId, pin))
-                if (!isValidJwt(response.token)) {
+                val request = LoginRequest(workerIdOrUsername, pin)
+                val loginResponse = api.login(request)
+                if (!isValidJwt(loginResponse.token)) {
                     throw IllegalStateException("Invalid JWT token received")
                 }
-                _token.value = response.token
-                PrefsHelper.saveWorkerId(getApplication(), response.workerId)
-                PrefsHelper.saveToken(getApplication(), response.token, response.expiry)
-                _loginError.value = null
-                fetchWorkerDetails()
-                fetchHistory()
-                fetchAlerts()
-            } catch (e: Exception) {
-                _loginError.value = when (e) {
-                    is UnknownHostException -> "Login failed: Unable to connect to server."
-                    is HttpException -> "Login failed: HTTP ${e.code()}"
-                    else -> "Login failed: ${e.message}"
+                if (loginResponse.workerId.isNullOrEmpty()) {
+                    Timber.e("Login: No workerId in response: $loginResponse")
+                    throw IllegalStateException("No workerId in login response")
                 }
-                Timber.e(e, "Login failed")
+                _token.value = loginResponse.token
+                PrefsHelper.saveWorkerId(context, loginResponse.workerId)
+                PrefsHelper.saveToken(context, loginResponse.token, loginResponse.expiry)
+                PrefsHelper.saveUsername(context, loginResponse.username)
+                _showUsernamePrompt.value = loginResponse.username.isNullOrEmpty()
+                Timber.d("Login: workerId=${loginResponse.workerId}, username=${loginResponse.username}, prompt=${_showUsernamePrompt.value}")
+                _loginError.value = null
+                fetchWorkerDetails(context)
+                fetchHistory(context)
+                fetchAlerts(context)
+            } catch (e: Exception) {
+                Timber.e(e, "Unexpected error during login")
+                _loginError.value = "Login failed: ${e.message}"
             }
         }
     }
 
-    fun updateFcmToken(fcmToken: String, workerId: String) {
+    fun updateFcmToken(fcmToken: String, context: Context) {
         viewModelScope.launch {
+            val workerId = PrefsHelper.getWorkerId(context) ?: run {
+                Timber.e("No workerId available for updating FCM token")
+                return@launch
+            }
             try {
                 api.updateFcmToken(workerId, fcmToken)
+                PrefsHelper.saveFcmToken(context, fcmToken)
+                Timber.i("FCM token updated for workerId=$workerId")
             } catch (e: Exception) {
                 Timber.e(e, "Failed to update FCM token")
             }
         }
     }
 
-    fun setToken(token: String?) {
+    fun setToken(token: String?, context: Context) {
         if (token != null && isValidJwt(token)) {
             _token.value = token
             val expiry = (System.currentTimeMillis() / 1000) + 24 * 60 * 60 // 24 hours
-            PrefsHelper.saveToken(getApplication(), token, expiry)
-            fetchWorkerDetails()
-            fetchHistory()
-            fetchAlerts()
+            PrefsHelper.saveToken(context, token, expiry)
+            fetchWorkerDetails(context)
+            fetchHistory(context)
+            fetchAlerts(context)
         } else {
-            PrefsHelper.clearToken(getApplication())
+            PrefsHelper.clearToken(context)
             _token.value = null
             _workerDetails.value = null
             _history.value = emptyList()
@@ -220,50 +263,70 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         _notifications.value = _notifications.value.toMutableList().apply { remove(notification) }
     }
 
-    fun fetchWorkerDetails(onError: ((Throwable?) -> Unit)? = null) {
+    fun fetchWorkerDetails(context: Context, onError: ((Throwable?) -> Unit)? = null) {
         viewModelScope.launch(Dispatchers.IO) {
+            val workerId = PrefsHelper.getWorkerId(context) ?: run {
+                Timber.e("No workerId available for fetching worker details")
+                onError?.invoke(IllegalStateException("No workerId available"))
+                return@launch
+            }
             try {
                 val token = _token.value ?: throw IllegalStateException("No token available")
                 val response = api.getWorkerDetails(token)
-                _workerDetails.value = response
-                PrefsHelper.saveWorkerDetails(getApplication(), response.firstName, response.surname)
-                onError?.invoke(null)
+                withContext(Dispatchers.Main) {
+                    _workerDetails.value = response
+                    PrefsHelper.saveWorkerDetails(context, response.firstName, response.surname)
+                    onError?.invoke(null)
+                }
             } catch (e: Exception) {
                 Timber.e(e, "Failed to fetch worker details")
-                onError?.invoke(e)
-                if (e.message?.contains("Invalid JWT") == true) {
-                    logout()
+                withContext(Dispatchers.Main) {
+                    onError?.invoke(e)
+                    if (e.message?.contains("Invalid JWT") == true) {
+                        logout(context)
+                    }
                 }
             }
         }
     }
 
-    fun fetchHistory(onError: ((Throwable) -> Unit)? = null) {
+    fun fetchHistory(context: Context, onError: ((Throwable) -> Unit)? = null) {
         viewModelScope.launch(Dispatchers.IO) {
+            val workerId = PrefsHelper.getWorkerId(context) ?: run {
+                Timber.e("No workerId available for fetching history")
+                onError?.invoke(IllegalStateException("No workerId available"))
+                return@launch
+            }
             try {
-                val workerId = PrefsHelper.getWorkerId(getApplication())
-                    ?: throw IllegalStateException("No workerId available")
                 val response = api.getWorkerHistory(workerId)
-                _history.value = response
+                withContext(Dispatchers.Main) {
+                    _history.value = response
+                }
             } catch (e: Exception) {
                 Timber.e(e, "Failed to fetch history")
-                _history.value = emptyList()
-                onError?.invoke(e)
+                withContext(Dispatchers.Main) {
+                    _history.value = emptyList()
+                    onError?.invoke(e)
+                }
             }
         }
     }
 
-    fun fetchAlerts() {
+    fun fetchAlerts(context: Context) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val token = _token.value ?: throw IllegalStateException("No token available")
                 val response = api.getAlerts(token)
-                _alerts.value = response
+                withContext(Dispatchers.Main) {
+                    _alerts.value = response
+                }
             } catch (e: Exception) {
                 Timber.e(e, "Failed to fetch alerts")
-                _alerts.value = emptyList()
-                if (e.message?.contains("Invalid JWT") == true) {
-                    logout()
+                withContext(Dispatchers.Main) {
+                    _alerts.value = emptyList()
+                    if (e.message?.contains("Invalid JWT") == true) {
+                        logout(context)
+                    }
                 }
             }
         }
@@ -273,18 +336,22 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         _alerts.value = _alerts.value.toMutableList().apply { remove(alert) }
     }
 
-    fun checkIn(phone: String) {
+    fun checkIn(phone: String, context: Context) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 if (!phone.matches(Regex("^\\d{7,15}$"))) {
                     throw IllegalArgumentException("Phone number must be 7-15 digits")
                 }
                 val token = _token.value ?: throw IllegalStateException("No token available")
-                val response = api.checkIn(token, CheckInRequest(phone))
+                val workerId = PrefsHelper.getWorkerId(context)
+                    ?: throw IllegalStateException("No workerId available")
+                Timber.d("checkIn: token=$token, workerId=$workerId")
+                val response = api.checkIn(token, CheckInRequest(phone, workerId))
                 _checkInSuccess.value = response.success
-                _checkInError.value = response.message ?: if (response.success) "Check-in successful" else "Check-in failed"
+                _checkInError.value = response.message
+                    ?: if (response.success) "Check-in successful" else "Check-in failed"
                 if (response.success) {
-                    fetchWorkerDetails()
+                    fetchWorkerDetails(context)
                 }
             } catch (e: Exception) {
                 val errorMessage = when (e) {
@@ -295,17 +362,49 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
                 _checkInSuccess.value = false
                 Timber.e(e, "Check-in failed")
                 if (errorMessage.contains("Invalid JWT")) {
-                    logout()
+                    logout(context)
                 }
             }
         }
     }
-
-    fun saveLocation(workerId: String, latitude: Double, longitude: Double, action: String) {
+    fun signContract(context: Context) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val token = _token.value ?: throw IllegalStateException("No token available")
-                val response = api.saveLocation(token, LocationRequest(worker_id = workerId, latitude = latitude, longitude = longitude, action = action))
+                val workerId = PrefsHelper.getWorkerId(context)
+                    ?: throw IllegalStateException("No workerId available")
+                Timber.d("signContract: token=$token, workerId=$workerId")
+                val response = api.signContract(token, workerId)
+                _contractSuccess.value = response.success
+                _contractError.value = response.message
+                    ?: if (response.success) "Plis bae yu traem kam saen lo wik ia" else "Contract signing failed"
+                if (response.success) {
+                    fetchWorkerDetails(context)
+                }
+            } catch (e: Exception) {
+                val errorMessage = when (e) {
+                    is HttpException -> "HTTP ${e.code()}: ${e.message()}"
+                    else -> e.message ?: "Unknown error"
+                }
+                _contractError.value = "Contract signing failed: $errorMessage"
+                _contractSuccess.value = false
+                Timber.e(e, "Contract signing failed: $errorMessage")
+                if (errorMessage.contains("Invalid JWT")) {
+                    logout(context)
+                }
+            }
+        }
+    }
+    fun saveLocation(context: Context, latitude: Double, longitude: Double, action: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val workerId = PrefsHelper.getWorkerId(context) ?: run {
+                Timber.e("No workerId available for saving location")
+                return@launch
+            }
+            try {
+                val token = _token.value ?: throw IllegalStateException("No token available")
+                val response =
+                    api.saveLocation(token, LocationRequest(workerId, latitude, longitude, action))
                 if (!response.success) {
                     Timber.e("Failed to save location: ${response.message}")
                 }
@@ -320,7 +419,7 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         _checkInError.value = null
     }
 
-    fun logout() {
+    fun logout(context: Context) {
         _token.value = null
         _loginError.value = null
         _workerDetails.value = null
@@ -331,21 +430,31 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         _checkInSuccess.value = null
         _checkInError.value = null
         _pendingFields.value = emptySet()
-        PrefsHelper.clearPrefs(getApplication())
+        _flightDetails.value = null
+        _pdbDetails.value = null
+        _pdbError.value = null
+        _directoryEntries.value = emptyList()
+        _teamEntries.value = emptyList()
+        _teamLocations.value = emptyMap()
+        _notices.value = null
+        _showUsernamePrompt.value = false
+        PrefsHelper.clearPrefs(context)
     }
 
-    // Edit Profile Functions
-
-    fun updatePreferredName(newName: String, callback: (Boolean, String?) -> Unit) {
-        val currentWorker = _workerDetails.value ?: return callback(false, "No worker data")
-        val currentToken = _token.value ?: return callback(false, "No token")
-
+    fun updatePreferredName(
+        newName: String,
+        context: Context,
+        callback: (Boolean, String?) -> Unit
+    ) {
+        val workerId =
+            PrefsHelper.getWorkerId(context) ?: return callback(false, "No workerId available")
+        val currentToken = _token.value ?: return callback(false, "No token available")
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val response = api.submitPendingUpdate(
                     token = currentToken,
                     pendingData = mapOf(
-                        "worker_id" to currentWorker.ID.toString(),
+                        "worker_id" to workerId,
                         "field_key" to "prefName",
                         "new_value" to newName
                     )
@@ -353,25 +462,34 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
                 withContext(Dispatchers.Main) {
                     _workerDetails.value = response
                     _pendingFields.value = response.pendingFields?.toSet() ?: emptySet()
+                    callback(true, null)
                 }
-                callback(true, null)
             } catch (e: Exception) {
                 Timber.e(e, "Failed to update preferred name")
-                callback(false, e.message)
+                withContext(Dispatchers.Main) {
+                    callback(false, e.message)
+                }
             }
         }
     }
 
-    fun updateContactInfo(primary: String, secondary: String, aunz: String, email: String, callback: (Boolean, String?) -> Unit) {
-        val currentWorker = _workerDetails.value ?: return callback(false, "No worker data")
-        val currentToken = _token.value ?: return callback(false, "No token")
-
+    fun updateContactInfo(
+        primary: String,
+        secondary: String,
+        aunz: String,
+        email: String,
+        context: Context,
+        callback: (Boolean, String?) -> Unit
+    ) {
+        val workerId =
+            PrefsHelper.getWorkerId(context) ?: return callback(false, "No workerId available")
+        val currentToken = _token.value ?: return callback(false, "No token available")
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val response = api.submitPendingUpdate(
                     token = currentToken,
                     pendingData = mapOf(
-                        "worker_id" to currentWorker.ID.toString(),
+                        "worker_id" to workerId,
                         "field_key" to "contacts",
                         "new_value" to "{\"phone\":\"$primary\",\"phone2\":\"$secondary\",\"aunzPhone\":\"$aunz\",\"email\":\"$email\"}"
                     )
@@ -379,11 +497,13 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
                 withContext(Dispatchers.Main) {
                     _workerDetails.value = response
                     _pendingFields.value = _pendingFields.value + "contacts"
+                    callback(true, null)
                 }
-                callback(true, null)
             } catch (e: Exception) {
                 Timber.e(e, "Failed to update contact info")
-                callback(false, e.message)
+                withContext(Dispatchers.Main) {
+                    callback(false, e.message)
+                }
             }
         }
     }
@@ -395,11 +515,12 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         birthplace: String,
         ppexpiry: String,
         birthProvince: String,
+        context: Context,
         callback: (Boolean, String?) -> Unit
     ) {
-        val currentWorker = _workerDetails.value ?: return callback(false, "No worker data")
-        val currentToken = _token.value ?: return callback(false, "No token")
-
+        val workerId =
+            PrefsHelper.getWorkerId(context) ?: return callback(false, "No workerId available")
+        val currentToken = _token.value ?: return callback(false, "No token available")
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val passportData = buildString {
@@ -408,11 +529,10 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
                     if (surname.isNotBlank()) append(",\"surname\":\"$surname\"")
                     append("}")
                 }
-
                 val response = api.submitPendingUpdate(
                     token = currentToken,
                     pendingData = mapOf(
-                        "worker_id" to currentWorker.ID.toString(),
+                        "worker_id" to workerId,
                         "field_key" to "passport",
                         "new_value" to passportData
                     )
@@ -420,18 +540,27 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
                 withContext(Dispatchers.Main) {
                     _workerDetails.value = response
                     _pendingFields.value = _pendingFields.value + "passport"
+                    callback(true, null)
                 }
-                callback(true, null)
             } catch (e: Exception) {
                 Timber.e(e, "Failed to update passport details")
-                callback(false, e.message)
+                withContext(Dispatchers.Main) {
+                    callback(false, e.message)
+                }
             }
         }
     }
 
-    fun fetchFlightDetails(workerId: String, onError: (Throwable?) -> Unit) {
-        val currentToken = _token.value
-        if (currentToken == null) {
+
+    // Update fetchFlightDetails
+    fun fetchFlightDetails(context: Context, onError: (Throwable?) -> Unit) {
+        val workerId = PrefsHelper.getWorkerId(context) ?: run {
+            _flightError.value = "No workerId available"
+            Timber.e("No workerId available for fetching flight details")
+            onError(IllegalStateException("No workerId available"))
+            return
+        }
+        val currentToken = _token.value ?: run {
             _flightError.value = "Authentication error. Please log in again."
             Timber.e("No token available for fetching flight details")
             onError(IllegalStateException("No token available"))
@@ -462,6 +591,7 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
                                 "No flights scheduled at this time. Please check back later."
                             }
                         }
+
                         else -> "Failed to load flight details: ${e.message()}"
                     }
                     _flightDetails.value = null
@@ -482,11 +612,17 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun fetchPdbDetails(workerId: String, onError: (Throwable?) -> Unit) {
-        val currentToken = _token.value
-        if (currentToken == null) {
-            Timber.e("No token available for fetching PDB details")
+    // Update fetchPdbDetails
+    fun fetchPdbDetails(context: Context, onError: (Throwable?) -> Unit) {
+        val workerId = PrefsHelper.getWorkerId(context) ?: run {
+            _pdbError.value = "No workerId available"
+            Timber.e("No workerId available for fetching PDB details")
+            onError(IllegalStateException("No workerId available"))
+            return
+        }
+        val currentToken = _token.value ?: run {
             _pdbError.value = "Authentication error. Please log in again."
+            Timber.e("No token available for fetching PDB details")
             onError(IllegalStateException("No token available"))
             return
         }
@@ -496,7 +632,8 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
                 withContext(Dispatchers.Main) {
                     if (response.startDate == null && response.endDate == null && response.pdbLocationLong == null) {
                         _pdbDetails.value = null
-                        _pdbError.value = "No pre-departure details available at this time. Please check back later."
+                        _pdbError.value =
+                            "No pre-departure details available at this time. Please check back later."
                         onError(Throwable("No pre-departure details available"))
                     } else {
                         _pdbDetails.value = response
@@ -529,19 +666,24 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun updatePdbStatus(workerId: String, onResult: (Boolean, String?) -> Unit) {
+    // Update updatePdbStatus
+    fun updatePdbStatus(context: Context, onResult: (Boolean, String?) -> Unit) {
+        val workerId = PrefsHelper.getWorkerId(context) ?: run {
+            Timber.e("No workerId available for updating PDB status")
+            onResult(false, "No workerId available")
+            return
+        }
+        val currentToken = _token.value ?: run {
+            Timber.e("No token available for updating PDB status")
+            onResult(false, "No token available")
+            return
+        }
         viewModelScope.launch {
             try {
-                val currentToken = _token.value
-                if (currentToken == null) {
-                    Timber.e("No token available for updating PDB status")
-                    onResult(false, "No token available")
-                    return@launch
-                }
                 val response = api.updatePdbStatus(workerId, currentToken)
                 withContext(Dispatchers.Main) {
                     if (response.success) {
-                        fetchPdbDetails(workerId) { error ->
+                        fetchPdbDetails(context) { error ->
                             if (error != null) {
                                 onResult(false, "Failed to refresh PDB details: ${error.message}")
                             } else {
@@ -562,23 +704,29 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun updatePdbInternalStatus(workerId: String, onResult: (Boolean, String?) -> Unit) {
+    // Update updatePdbInternalStatus
+    fun updatePdbInternalStatus(context: Context, onResult: (Boolean, String?) -> Unit) {
+        val workerId = PrefsHelper.getWorkerId(context) ?: run {
+            Timber.e("No workerId available for updating internal PDB status")
+            onResult(false, "No workerId available")
+            return
+        }
+        val currentToken = _token.value ?: run {
+            Timber.e("No token available for updating internal PDB status")
+            onResult(false, "No token available")
+            return
+        }
         viewModelScope.launch {
             try {
-                val currentToken = _token.value
-                if (currentToken == null) {
-                    Timber.e("No token available for updating internal PDB status")
-                    onResult(false, "No token available")
-                    return@launch
-                }
                 val response = api.updatePdbInternalStatus(workerId, currentToken)
                 withContext(Dispatchers.Main) {
                     if (response.success) {
-                        fetchPdbDetails(workerId) { error ->
+                        fetchPdbDetails(context) { error ->
                             if (error != null) {
                                 onResult(false, "Failed to refresh PDB details: ${error.message}")
                             } else {
-                                _pdbDetails.value = _pdbDetails.value?.copy(internalPdbStatus = "App OK")
+                                _pdbDetails.value =
+                                    _pdbDetails.value?.copy(internalPdbStatus = "App OK")
                                 onResult(true, response.message)
                             }
                         }
@@ -595,9 +743,14 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun updateFlightStatus(workerId: String, onResult: (Boolean, String?) -> Unit) {
-        val currentToken = _token.value
-        if (currentToken == null) {
+    // Update updateFlightStatus
+    fun updateFlightStatus(context: Context, onResult: (Boolean, String?) -> Unit) {
+        val workerId = PrefsHelper.getWorkerId(context) ?: run {
+            Timber.e("No workerId available for updating flight status")
+            onResult(false, "No workerId available")
+            return
+        }
+        val currentToken = _token.value ?: run {
             Timber.e("No token available for updating flight status")
             onResult(false, "No token available")
             return
@@ -605,66 +758,98 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             try {
                 val response = api.updateFlightStatus(workerId, currentToken)
-                if (response.success) {
-                    fetchFlightDetails(workerId) { error ->
-                        if (error != null) {
-                            onResult(false, "Failed to refresh flight details: ${error.message}")
-                        } else {
-                            onResult(true, response.message)
+                withContext(Dispatchers.Main) {
+                    if (response.success) {
+                        fetchFlightDetails(context) { error ->
+                            if (error != null) {
+                                onResult(
+                                    false,
+                                    "Failed to refresh flight details: ${error.message}"
+                                )
+                            } else {
+                                onResult(true, response.message)
+                            }
                         }
+                    } else {
+                        onResult(false, response.message)
                     }
-                } else {
-                    onResult(false, response.message)
                 }
             } catch (e: Exception) {
                 Timber.e(e, "Failed to update flight status")
-                onResult(false, e.message)
+                withContext(Dispatchers.Main) {
+                    onResult(false, e.message)
+                }
             }
         }
     }
 
-    fun fetchDirectory(token: String, workerId: String) {
+    // Update fetchDirectory
+    fun fetchDirectory(context: Context) {
+        val workerId = PrefsHelper.getWorkerId(context) ?: run {
+            Timber.e("No workerId available for fetching directory")
+            return
+        }
+        val token = _token.value ?: run {
+            Timber.e("No token available for fetching directory")
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val entries = api.getDirectory(token, workerId)
-                _directoryEntries.value = entries
+                withContext(Dispatchers.Main) {
+                    _directoryEntries.value = entries
+                }
             } catch (e: Exception) {
                 Timber.e(e, "Failed to fetch directory")
-                _directoryEntries.value = emptyList()
-                if (e is HttpException && e.message?.contains("Invalid JWT") == true) {
-                    logout()
+                withContext(Dispatchers.Main) {
+                    _directoryEntries.value = emptyList()
+                    if (e is HttpException && e.message?.contains("Invalid JWT") == true) {
+                        logout(context)
+                    }
                 }
             }
         }
     }
 
-    fun fetchTeams(token: String, workerId: String, limit: Int = 50, offset: Int = 0) {
+    // Update fetchTeams
+    fun fetchTeams(context: Context, limit: Int = 50, offset: Int = 0) {
+        val workerId = PrefsHelper.getWorkerId(context) ?: run {
+            Timber.e("No workerId available for fetching teams")
+            return
+        }
+        val token = _token.value ?: run {
+            Timber.e("No token available for fetching teams")
+            return
+        }
         viewModelScope.launch {
             try {
                 val teams = api.getTeams(token, workerId, limit, offset)
-                _teamEntries.value = teams.filter { it.teamName != null && it.teamName.isNotEmpty() }
-                _teamEntries.value.forEach { team ->
-                    fetchTeamLocations(token, workerId, team.teamId)
+                withContext(Dispatchers.Main) {
+                    _teamEntries.value =
+                        teams.filter { it.teamName != null && it.teamName.isNotEmpty() }
+                    _teamEntries.value.forEach { team ->
+                        fetchTeamLocations(token, workerId, team.teamId)
+                    }
                 }
             } catch (e: HttpException) {
                 Timber.e(e, "Failed to fetch teams")
-                throw e
             } catch (e: JsonParseException) {
                 Timber.e(e, "Failed to parse teams response")
-                throw e
             } catch (e: Exception) {
                 Timber.e(e, "Failed to fetch teams")
-                throw e
             }
         }
     }
 
+    // Update fetchTeamLocations
     private fun fetchTeamLocations(token: String, workerId: String, teamId: Int) {
         viewModelScope.launch {
             try {
                 val locations = api.getTeamLocations(token, workerId, teamId)
-                _teamLocations.value = _teamLocations.value.toMutableMap().apply {
-                    put(teamId, locations)
+                withContext(Dispatchers.Main) {
+                    _teamLocations.value = _teamLocations.value.toMutableMap().apply {
+                        put(teamId, locations)
+                    }
                 }
             } catch (e: HttpException) {
                 Timber.e(e, "Failed to fetch locations for team $teamId")
@@ -676,7 +861,16 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    suspend fun submitFeedback(token: String, workerId: String, teamId: Int, feedbackText: String, screen: String?) {
+    // Update submitFeedback
+    suspend fun submitFeedback(
+        context: Context,
+        teamId: Int,
+        feedbackText: String,
+        screen: String?
+    ) {
+        val workerId = PrefsHelper.getWorkerId(context)
+            ?: throw IllegalArgumentException("No workerId available")
+        val token = _token.value ?: throw IllegalStateException("No token available")
         if (workerId.isBlank()) {
             Timber.w("Worker ID is blank")
             throw IllegalArgumentException("Worker ID cannot be blank")
@@ -688,23 +882,35 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         }
         val body = FeedbackRequest(
             workerId = workerId,
-            teamId = if (teamId == 0) null else teamId, // Convert teamId=0 to null for /feedback/submit
+            teamId = if (teamId == 0) null else teamId,
             feedbackText = trimmedFeedback,
             screen = screen
         )
-        Timber.d("Submitting feedback to %s: %s", if (teamId > 0) "/team.php/teams/feedback" else "/feedback/submit", body)
+        Timber.d(
+            "Submitting feedback to %s: %s",
+            if (teamId > 0) "team.php/teams/feedback" else "feedback.php/submit",
+            body
+        )
         val response = if (teamId > 0) {
             api.submitTeamFeedback(token, body)
         } else {
             api.submitFeedback(token, body)
         }
         if (!response.isSuccessful) {
-            Timber.e("Feedback submission failed with code %d: %s", response.code(), response.errorBody()?.string())
+            Timber.e(
+                "Feedback submission failed with code %d: %s",
+                response.code(),
+                response.errorBody()?.string()
+            )
             throw HttpException(response)
         }
     }
 
-    suspend fun acceptApplication(token: String, workerId: String) {
+    // Update acceptApplication
+    suspend fun acceptApplication(context: Context) {
+        val workerId = PrefsHelper.getWorkerId(context)
+            ?: throw IllegalArgumentException("No workerId available")
+        val token = _token.value ?: throw IllegalStateException("No token available")
         val body = mapOf("workerId" to workerId)
         val response = api.acceptApplication(token, body)
         if (!response.isSuccessful) {
@@ -712,19 +918,80 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    suspend fun fetchNotices(token: String, workerId: String) {
+    // Update fetchNotices
+    suspend fun fetchNotices(context: Context) {
+        val workerId = PrefsHelper.getWorkerId(context) ?: run {
+            Timber.e("No workerId available for fetching notices")
+            _notices.value = null
+            return
+        }
+        val token = _token.value ?: run {
+            Timber.e("No token available for fetching notices")
+            _notices.value = null
+            return
+        }
         try {
             val response = api.getNotices(token, workerId)
             if (response.isSuccessful) {
                 val body = response.body()
-                _notices.value = body?.get("notices")
+                withContext(Dispatchers.Main) {
+                    _notices.value = body?.get("notices")
+                }
             } else {
                 Timber.e("Failed to fetch notices: HTTP ${response.code()}")
                 throw HttpException(response)
             }
         } catch (e: Exception) {
             Timber.e(e, "Failed to fetch notices")
-            _notices.value = null
+            withContext(Dispatchers.Main) {
+                _notices.value = null
+            }
         }
     }
+
+    fun updateUsername(username: String, context: Context, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val workerId = PrefsHelper.getWorkerId(context)
+                if (workerId.isNullOrEmpty()) {
+                    Timber.e("UpdateUsername: No workerId in SharedPreferences")
+                    onError("Session expired. Please log in again.")
+                    return@launch
+                }
+                val token = PrefsHelper.getToken(context)
+                if (token.isNullOrEmpty()) {
+                    Timber.e("UpdateUsername: No token in SharedPreferences")
+                    onError("Session expired. Please log in again.")
+                    return@launch
+                }
+                Timber.d("UpdateUsername: Calling API with workerId=$workerId, username=$username, token=$token")
+                val request = UpdateUsernameRequest(workerId, username)
+                val response = api.updateUsername(token, request)
+                if (response.success) {
+                    PrefsHelper.saveUsername(context, username)
+                    _showUsernamePrompt.value = false
+                    Timber.d("UpdateUsername: Success for workerId=$workerId, username=$username")
+                    onSuccess()
+                } else {
+                    Timber.e("UpdateUsername: Failed with message: ${response.message}")
+                    onError(response.message ?: "Failed to update username")
+                }
+            } catch (e: HttpException) {
+                Timber.e(e, "UpdateUsername: HTTP error ${e.code()}: ${e.message}")
+                if (e.code() == 401) {
+                    onError("Unauthorized: Invalid or expired session. Please log in again.")
+                } else {
+                    onError("Server error: ${e.code()}. Please try again.")
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "UpdateUsername: Unexpected error")
+                onError("Failed to update username: ${e.message}")
+            }
+        }
+    }
+    fun resetUsernamePrompt() {
+        _showUsernamePrompt.value = false
+        Timber.d("ResetUsernamePrompt: Cleared showUsernamePrompt")
+    }
 }
+

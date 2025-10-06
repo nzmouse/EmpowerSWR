@@ -43,12 +43,14 @@ fun RegistrationScreen(
     var passport by rememberSaveable { mutableStateOf("") }
     var surname by rememberSaveable { mutableStateOf("") }
     var pin by rememberSaveable { mutableStateOf("") }
+    var username by rememberSaveable { mutableStateOf("") }
     var confirmPin by rememberSaveable { mutableStateOf("") }
     var fcmToken by remember { mutableStateOf<String?>(null) }
     var fcmError by remember { mutableStateOf<String?>(null) }
     var showWorkerIdDialog by rememberSaveable { mutableStateOf(false) }
     var registrationComplete by rememberSaveable { mutableStateOf(false) }
     var dialogDismissed by rememberSaveable { mutableStateOf(false) }
+    var hasInteracted by remember { mutableStateOf(false) } // Track user interaction
     val snackbarHostState = remember { SnackbarHostState() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val localContext = LocalContext.current
@@ -59,9 +61,35 @@ fun RegistrationScreen(
     val notifications by viewModel.notifications
     val notificationFromIntent by viewModel.notificationFromIntent
 
-    // Validate PIN reactively
-    val pinError by remember(pin, confirmPin) {
-        derivedStateOf { validatePin(pin, confirmPin) }
+    // Validate PIN and username only after interaction
+    fun validatePin(pin: String, confirmPin: String): String? {
+        return when {
+            pin.length != 4 -> "PIN must be 4 digits"
+            pin != confirmPin -> "PINs do not match"
+            pin.all { it == pin[0] } -> "PIN cannot be all the same digit"
+            else -> null
+        }
+    }
+
+    fun validateUsername(username: String): String? {
+        return when {
+            username.isEmpty() -> "Username cannot be empty"
+            username.length < 3 -> "Username must be at least 3 characters"
+            username.length > 20 -> "Username cannot exceed 20 characters"
+            !username.matches(Regex("^[a-zA-Z0-9]+$")) -> "Username can only contain letters and numbers"
+            else -> null
+        }
+    }
+
+    val pinError by remember(hasInteracted, pin, confirmPin) {
+        derivedStateOf {
+            if (hasInteracted) validatePin(pin, confirmPin) else null
+        }
+    }
+    val usernameError by remember(hasInteracted, username) {
+        derivedStateOf {
+            if (hasInteracted) validateUsername(username) else null
+        }
     }
 
     // Show Worker ID dialog after registration
@@ -133,40 +161,37 @@ fun RegistrationScreen(
             }
         }
     }
-
+    // Log screen usage
+    LaunchedEffect(Unit) {
+        Timber.i("ScreenUsage: RegistrationScreen displayed, timestamp=${System.currentTimeMillis()}")
+    }
     // Handle registration completion
-    LaunchedEffect(token) {
-        if (token != null && !registrationComplete && !showWorkerIdDialog) {
-            // Clear existing token to prevent navigation conflicts
+    LaunchedEffect(viewModel.token.value) {
+        if (viewModel.token.value != null && !registrationComplete && !showWorkerIdDialog) {
             val existingToken = PrefsHelper.getToken(localContext)
-            if (existingToken != null && existingToken != token) {
+            if (existingToken != null && existingToken != viewModel.token.value) {
                 Timber.i("Clearing existing token")
                 PrefsHelper.clearToken(localContext)
             }
-            FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
-                if (task.isSuccessful) {
-                    val newFcmToken = task.result
-                    fcmToken = newFcmToken
-                    val workerId = PrefsHelper.getWorkerId(localContext)
-                    if (workerId != null) {
-                        Timber.i("FCM token retrieved")
-                        try {
-                            viewModel.updateFcmToken(newFcmToken, workerId)
-                        } catch (e: Exception) {
-                            fcmError = "Failed to update FCM token: ${e.message}"
-                            Timber.tag("RegistrationScreen").e(e, "updateFcmToken error")
+            val workerId = PrefsHelper.getWorkerId(localContext)
+            if (workerId != null) {
+                FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
+                    if (task.isSuccessful) {
+                        fcmToken = task.result
+                        coroutineScope.launch {
+                            viewModel.updateFcmToken(fcmToken!!, localContext)
                         }
                     } else {
-                        fcmError = "Worker ID not found for FCM token update"
-                        Timber.tag("RegistrationScreen").e("Worker ID not found for FCM token update")
+                        fcmError = "Failed to get FCM token: ${task.exception?.message}"
+                        Timber.e("FCM token fetch error: ${task.exception?.message}")
                     }
-                } else {
-                    fcmError = "Failed to get FCM token: ${task.exception?.message}"
-                    Timber.tag("RegistrationScreen").e(task.exception?.message, "FCM token fetch error")
                 }
+            } else {
+                fcmError = "Worker ID not found for FCM token update"
+                Timber.e("Worker ID not found for FCM token update")
             }
-            viewModel.fetchWorkerDetails()
-            viewModel.fetchAlerts()
+            viewModel.fetchWorkerDetails(localContext)
+            viewModel.fetchAlerts(localContext)
             PrefsHelper.setRegistered(localContext, true)
             registrationComplete = true
             showWorkerIdDialog = true
@@ -228,7 +253,7 @@ fun RegistrationScreen(
                 )
                 viewModel.setNotificationFromIntent(null, null)
             } catch (e: Exception) {
-                Timber.tag("RegistrationScreen").e(e,"Failed to show Snackbar")
+                Timber.tag("RegistrationScreen").e(e, "Failed to show Snackbar")
             }
         }
     }
@@ -260,27 +285,71 @@ fun RegistrationScreen(
             Spacer(modifier = Modifier.height(16.dp))
             OutlinedTextField(
                 value = passport,
-                onValueChange = { newValue -> passport = newValue.trim().uppercase() },
+                onValueChange = {
+                    passport = it.trim().uppercase()
+                    hasInteracted = true // Set on interaction
+                },
                 label = { Text("Passport Number (e.g., RV0127280)") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Text,
                     imeAction = ImeAction.Next
+                ),
+                keyboardActions = KeyboardActions(
+                    onNext = { hasInteracted = true } // Set on focus change
                 )
             )
             Spacer(modifier = Modifier.height(8.dp))
             OutlinedTextField(
                 value = surname,
-                onValueChange = { newValue -> surname = newValue.trim().uppercase() },
+                onValueChange = {
+                    surname = it.trim().uppercase()
+                    hasInteracted = true // Set on interaction
+                },
                 label = { Text("Surname") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Text,
                     imeAction = ImeAction.Next
+                ),
+                keyboardActions = KeyboardActions(
+                    onNext = { hasInteracted = true } // Set on focus change
                 )
             )
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = username,
+                onValueChange = {
+                    username = it.trim()
+                    hasInteracted = true // Set on interaction
+                },
+                label = { Text("Username / Nickname") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Text,
+                    imeAction = ImeAction.Next
+                ),
+                keyboardActions = KeyboardActions(
+                    onNext = { hasInteracted = true } // Set on focus change
+                ),
+                isError = usernameError != null
+            )
+            usernameError?.let { error ->
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = error,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    ),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
             loginError?.let { error ->
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
@@ -297,7 +366,10 @@ fun RegistrationScreen(
             Spacer(modifier = Modifier.height(8.dp))
             OutlinedTextField(
                 value = pin,
-                onValueChange = { newValue -> pin = newValue.take(4) },
+                onValueChange = {
+                    pin = it.take(4)
+                    hasInteracted = true // Set on interaction
+                },
                 label = { Text("Choose a 4-Digit PIN") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
@@ -305,12 +377,18 @@ fun RegistrationScreen(
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.NumberPassword,
                     imeAction = ImeAction.Next
+                ),
+                keyboardActions = KeyboardActions(
+                    onNext = { hasInteracted = true } // Set on focus change
                 )
             )
             Spacer(modifier = Modifier.height(8.dp))
             OutlinedTextField(
                 value = confirmPin,
-                onValueChange = { newValue -> confirmPin = newValue.take(4) },
+                onValueChange = {
+                    confirmPin = it.take(4)
+                    hasInteracted = true // Set on interaction
+                },
                 label = { Text("Re-enter PIN") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
@@ -322,10 +400,10 @@ fun RegistrationScreen(
                 keyboardActions = KeyboardActions(
                     onDone = {
                         keyboardController?.hide()
-                        if (pinError == null && pin.isNotEmpty()) {
+                        hasInteracted = true // Set on submit
+                        if (pinError == null && usernameError == null && pin.isNotEmpty() && username.isNotEmpty()) {
                             coroutineScope.launch {
-                                Timber.i("Attempting registration")
-                                viewModel.register(passport, surname, pin)
+                                viewModel.register(passport, surname, username, pin, localContext)
                             }
                         }
                     }
@@ -361,14 +439,15 @@ fun RegistrationScreen(
             Button(
                 onClick = {
                     keyboardController?.hide()
-                    if (pinError == null && pin.isNotEmpty()) {
+                    hasInteracted = true // Set on button click
+                    if (pinError == null && usernameError == null && pin.isNotEmpty() && username.isNotEmpty()) {
                         coroutineScope.launch {
-                            viewModel.register(passport, surname, pin)
+                            viewModel.register(passport, surname, username, pin, localContext)
                         }
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
-                enabled = pinError == null && pin.isNotEmpty()
+                enabled = passport.isNotEmpty() && surname.isNotEmpty() && username.isNotEmpty() && pin.isNotEmpty()
             ) {
                 Text("Register")
             }
@@ -392,15 +471,5 @@ fun RegistrationScreen(
                 }
             )
         }
-    }
-}
-
-// PIN Validation
-private fun validatePin(pin: String, confirmPin: String): String? {
-    return when {
-        pin.length != 4 -> "PIN must be 4 digits"
-        pin != confirmPin -> "PINs do not match"
-        pin.all { it == pin[0] } -> "PIN cannot be all the same digit"
-        else -> null
     }
 }

@@ -2,6 +2,7 @@ package com.empowerswr.luksave.ui.screens
 
 import android.content.Context
 import android.content.Intent
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -64,9 +65,16 @@ fun TeamScreen(
     var fetchError by remember { mutableStateOf<String?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
     var isRefreshing by remember { mutableStateOf(false) }
+    val localContext = LocalContext.current
+
+    // Log screen usage
+    LaunchedEffect(Unit) {
+        Timber.i("ScreenUsage: LoginScreen displayed, workerId=${PrefsHelper.getWorkerId(context) ?: "unknown"}, timestamp=${System.currentTimeMillis()}")
+    }
 
     // Fetch notices and teams on initialization
     LaunchedEffect(token, workerId) {
+
         if (token == null || workerId.isEmpty()) {
             navController.navigate("login") {
                 popUpTo(navController.graph.startDestinationId) { inclusive = true }
@@ -75,8 +83,8 @@ fun TeamScreen(
         } else {
             val safeToken = token as String
             try {
-                viewModel.fetchTeams(safeToken, workerId, limit = 20, offset = 0)
-                viewModel.fetchNotices(safeToken, workerId)
+                viewModel.fetchTeams(localContext, limit = 20, offset = 0)
+                viewModel.fetchNotices(localContext)
                 fetchError = null
             } catch (e: HttpException) {
                 val errorMessage = when (e.code()) {
@@ -108,14 +116,21 @@ fun TeamScreen(
     }
 
     // Retry fetching notices if null with a delay
-    LaunchedEffect(notices, token, workerId) {
-        if (notices == null && token != null && workerId.isNotEmpty()) {
+    LaunchedEffect(notices, token) {
+        if (notices == null && token != null) {
             delay(1000)
-            viewModel.fetchNotices(token as String, workerId)
+            try {
+                viewModel.fetchNotices(localContext)
+            } catch (e: Exception) {
+                Timber.tag("TeamScreen").e(e, "Fetch notices error")
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar("Failed to load notices: ${e.message ?: "Unknown error"}")
+                }
+            }
         }
     }
-
     Scaffold(
+
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) }
     ) { padding ->
         if (token == null || workerId.isEmpty()) {
@@ -164,8 +179,8 @@ fun TeamScreen(
                             if (token != null && workerId.isNotEmpty()) {
                                 val safeToken = token as String
                                 try {
-                                    viewModel.fetchTeams(safeToken, workerId, limit = 20, offset = 0)
-                                    viewModel.fetchNotices(safeToken, workerId)
+                                    viewModel.fetchTeams(localContext,  limit = 20, offset = 0)
+                                    viewModel.fetchNotices(localContext)
                                     fetchError = null
                                 } catch (e: HttpException) {
                                     val errorMessage = when (e.code()) {
@@ -213,11 +228,12 @@ fun TeamScreen(
                 isRefreshing = isRefreshing,
                 onRefresh = {
                     coroutineScope.launch {
+
                         if (token != null && workerId.isNotEmpty()) {
                             isRefreshing = true
                             try {
-                                viewModel.fetchTeams(token as String, workerId, limit = 20, offset = 0)
-                                viewModel.fetchNotices(token as String, workerId)
+                                viewModel.fetchTeams(localContext, limit = 20, offset = 0)
+                                viewModel.fetchNotices(localContext)
                                 fetchError = null
                             } catch (e: HttpException) {
                                 val errorMessage = when (e.code()) {
@@ -317,8 +333,7 @@ fun TeamCard(
     var feedbackText by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
-
-
+    val localContext = LocalContext.current
     // Select departure date
     val selectedDepDate = when {
         team.intDepDate != null && team.intDepDate != "0000-00-00" && team.intDepDate.isNotBlank() -> team.intDepDate
@@ -392,43 +407,40 @@ fun TeamCard(
                 }
             },
             confirmButton = {
+                val localContext = LocalContext.current
+                var errorMessage by remember { mutableStateOf<String?>(null) }
+                var navigateToLogin by remember { mutableStateOf(false) }
                 TextButton(
                     onClick = {
-                        if (feedbackText.isNotBlank() && token != null && workerId.isNotEmpty()) {
+                        if (feedbackText.isNotBlank()) {
                             isLoading = true
                             coroutineScope.launch {
                                 try {
-                                    viewModel.submitFeedback(token, workerId, team.teamId, feedbackText, null)
-                                    snackbarHostState.showSnackbar("Feedback submitted successfully")
+                                    viewModel.submitFeedback(localContext, team.teamId, feedbackText, null)
+                                    errorMessage = "Feedback submitted successfully"
                                     showFeedbackDialog = false
                                     feedbackText = ""
                                 } catch (e: HttpException) {
-                                    val errorMessage = when (e.code()) {
+                                    errorMessage = when (e.code()) {
                                         400 -> "Invalid input. Please check feedback text."
-                                        401 -> "Invalid or expired token. Please log in again."
+                                        401 -> {
+                                            navigateToLogin = true
+                                            "Invalid or expired token. Please log in again."
+                                        }
                                         403 -> "Unauthorized for this worker."
                                         500 -> "Server error. Please try again later."
                                         else -> "Failed to submit feedback: ${e.message()}"
                                     }
-                                    Timber.tag("TeamCard").e(e, "Feedback submission failed")
-                                    snackbarHostState.showSnackbar(errorMessage)
-                                    if (e.code() == 401) {
-                                        navController.navigate("login") {
-                                            popUpTo(navController.graph.startDestinationId) { inclusive = true }
-                                            launchSingleTop = true
-                                        }
-                                    }
+                                    Timber.tag("TeamCard").e(e, "Feedback submission failed: %s", errorMessage)
                                 } catch (e: Exception) {
+                                    errorMessage = "Failed to submit feedback: ${e.message ?: "Unknown error"}"
                                     Timber.tag("TeamCard").e(e, "Unexpected error during feedback submission")
-                                    snackbarHostState.showSnackbar("Failed to submit feedback: ${e.message ?: "Unknown error"}")
                                 } finally {
                                     isLoading = false
                                 }
                             }
                         } else {
-                            coroutineScope.launch {
-                                snackbarHostState.showSnackbar("Please enter feedback text")
-                            }
+                            errorMessage = "Please enter feedback text"
                         }
                     },
                     enabled = feedbackText.isNotBlank() && !isLoading
@@ -444,6 +456,21 @@ fun TeamCard(
                             )
                         }
                         Text("Submit")
+                    }
+                }
+                LaunchedEffect(errorMessage) {
+                    errorMessage?.let {
+                        snackbarHostState.showSnackbar(it)
+                        errorMessage = null
+                    }
+                }
+                LaunchedEffect(navigateToLogin) {
+                    if (navigateToLogin) {
+                        navController.navigate("login") {
+                            popUpTo(navController.graph.startDestinationId) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                        navigateToLogin = false
                     }
                 }
             },
@@ -548,71 +575,77 @@ fun TeamCard(
 
             // Accept Job Button (only shown for notices = 'Locate' or 'App Checkin')
             if (notices == "Locate" || notices == "App Checkin") {
+                val errorMessage = remember { mutableStateOf<String?>(null) }
+                val navigateToLogin = remember { mutableStateOf(false) }
                 Button(
                     onClick = {
-                        if (token != null && workerId.isNotEmpty()) {
+                        if (token != null) {
                             coroutineScope.launch {
                                 try {
-                                    viewModel.acceptApplication(token, workerId)
-                                    snackbarHostState.showSnackbar(
-                                        message = "Job accepted successfully",
-                                        duration = SnackbarDuration.Short
-                                    )
+                                    viewModel.acceptApplication(localContext)
+                                    errorMessage.value = "Job accepted successfully"
                                     try {
-                                        viewModel.fetchTeams(token, workerId, limit = 20, offset = 0)
-                                        viewModel.fetchNotices(token, workerId)
+                                        viewModel.fetchTeams(localContext, limit = 20, offset = 0)
+                                        viewModel.fetchNotices(localContext)
                                     } catch (e: Exception) {
                                         Timber.tag("TeamCard").e(e, "Failed to refresh data after job acceptance")
-                                        snackbarHostState.showSnackbar("Failed to refresh data: ${e.message ?: "Unknown error"}")
+                                        errorMessage.value = "Failed to refresh data: ${e.message ?: "Unknown error"}"
                                     }
                                 } catch (e: HttpException) {
-                                    val errorMessage = when (e.code()) {
+                                    errorMessage.value = when (e.code()) {
                                         404 -> "No matching worker found."
-                                        401 -> "Invalid or expired token."
+                                        401 -> {
+                                            navigateToLogin.value = true
+                                            "Invalid or expired token."
+                                        }
                                         403 -> "Unauthorized for this worker."
                                         500 -> "Server error. Please try again later."
                                         else -> "Failed to accept job: ${e.message()}"
                                     }
                                     Timber.tag("TeamCard").e(e, "Failed to accept job")
-                                    snackbarHostState.showSnackbar(errorMessage)
-                                    if (e.code() == 401) {
-                                        navController.navigate("login") {
-                                            popUpTo(navController.graph.startDestinationId) { inclusive = true }
-                                            launchSingleTop = true
-                                        }
-                                    }
                                 } catch (e: Exception) {
+                                    errorMessage.value = "Error: ${e.message ?: "Unknown error"}"
                                     Timber.tag("TeamCard").e(e, "Unexpected error during job acceptance")
-                                    snackbarHostState.showSnackbar("Error: ${e.message ?: "Unknown error"}")
                                 }
                             }
                         } else {
-                            coroutineScope.launch {
-                                snackbarHostState.showSnackbar("Please log in to accept the job")
-                                navController.navigate("login") {
-                                    popUpTo(navController.graph.startDestinationId) { inclusive = true }
-                                    launchSingleTop = true
-                                }
-                            }
+                            errorMessage.value = "Please log in to accept the job"
+                            navigateToLogin.value = true
                         }
                     },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 8.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Check,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onPrimary
-                        )
-                        Text(
-                            text = "Accept Job",
-                            style = MaterialTheme.typography.labelLarge
-                        )
+                        .padding(top = 8.dp),
+                    content = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onPrimary
+                            )
+                            Text(
+                                text = "Accept Job",
+                                style = MaterialTheme.typography.labelLarge
+                            )
+                        }
+                    }
+                )
+                LaunchedEffect(errorMessage.value) {
+                    errorMessage.value?.let {
+                        snackbarHostState.showSnackbar(it)
+                        errorMessage.value = null
+                    }
+                }
+                LaunchedEffect(navigateToLogin.value) {
+                    if (navigateToLogin.value) {
+                        navController.navigate("login") {
+                            popUpTo(navController.graph.startDestinationId) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                        navigateToLogin.value = false
                     }
                 }
             }
@@ -626,8 +659,9 @@ fun TeamCard(
             .padding(top = 8.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.inversePrimary
-        )
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), // Blue-gray outline
     ) {
         Column(
             modifier = Modifier
@@ -646,8 +680,9 @@ fun TeamCard(
                 modifier = Modifier.fillMaxWidth(),
                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.tertiaryContainer
-                )
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), // Blue-gray outline
             ) {
                 Row(
                     modifier = Modifier
@@ -738,8 +773,9 @@ fun TeamCard(
                         .fillMaxWidth()
                         .padding(top = 8.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
                     ),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), // Blue-gray outline,
                     elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                 ) {
                     Row(
@@ -833,8 +869,9 @@ fun TeamCard(
                         .fillMaxWidth()
                         .padding(top = 8.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
                     ),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), // Blue-gray outline,
                     elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                 ) {
                     Row(
@@ -937,8 +974,9 @@ fun TeamCard(
                 .fillMaxWidth()
                 .padding(top = 8.dp),
             colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant
+                containerColor = MaterialTheme.colorScheme.surface
             ),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), // Blue-gray outline,
             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
         ) {
             Column(

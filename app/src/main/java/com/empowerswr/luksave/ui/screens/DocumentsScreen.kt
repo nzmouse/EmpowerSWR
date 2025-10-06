@@ -5,23 +5,29 @@ import android.app.DownloadManager
 import android.content.Context
 import android.net.Uri
 import android.os.Environment
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
@@ -32,6 +38,7 @@ import com.empowerswr.luksave.network.FileItem
 import com.empowerswr.luksave.network.ListFilesService
 import com.empowerswr.luksave.network.UploadService
 import com.empowerswr.luksave.PrefsHelper
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
@@ -41,16 +48,18 @@ import java.io.File
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.core.net.toUri
-import androidx.navigation.compose.currentBackStackEntryAsState
 import com.empowerswr.luksave.MainActivity
 import com.empowerswr.luksave.findActivity
 import java.net.URLEncoder
 import timber.log.Timber
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DocumentsScreen(
     uploadService: UploadService,
     listFilesService: ListFilesService,
-    navController: NavController
+    navController: NavController,
+    downloadCompleteFlow: SharedFlow<Pair<Long, String>>
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -59,8 +68,10 @@ fun DocumentsScreen(
     var selectedDocumentType by remember { mutableStateOf("") }
     var files by remember { mutableStateOf<List<FileItem>>(emptyList()) }
     var isLoadingFiles by remember { mutableStateOf(false) }
-    var lastClickTime by rememberSaveable { mutableStateOf(0L) } // Debounce navigation
-    var navigationAttemptCount by remember { mutableStateOf(0) } // Navigation attempt counter
+    var isRefreshing by remember { mutableStateOf(false) } // Separate state for refresh
+    var lastClickTime by rememberSaveable { mutableStateOf(0L) }
+    var lastNavigatedFile by rememberSaveable { mutableStateOf<String?>(null) } // Keep for logging
+    var navigationAttemptCount by remember { mutableStateOf(0) }
     val documentTypes = listOf(
         "Passport" to "PPT",
         "National ID Card" to "NID",
@@ -74,60 +85,99 @@ fun DocumentsScreen(
     )
 
     var expanded by remember { mutableStateOf(false) }
+    val localContext = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
+    val interactionSource = remember { MutableInteractionSource() }
+    // Log screen usage
+    LaunchedEffect(Unit) {
+        Timber.i("ScreenUsage: DocumentsScreen displayed, workerId=${PrefsHelper.getWorkerId(context) ?: "unknown"}, timestamp=${System.currentTimeMillis()}")
+    }
+    // Handle clicks on the TextField to expand dropdown
+    LaunchedEffect(interactionSource) {
+        interactionSource.interactions.collect { interaction ->
+            if (interaction is PressInteraction.Press) {
+                expanded = true
+                focusManager.clearFocus()
+            }
+        }
+    }
+
+    // File loading logic
+    fun loadFiles() {
+        scope.launch {
+            isLoadingFiles = true
+            isRefreshing = true
+            try {
+                val token = PrefsHelper.getToken(localContext)
+                if (token?.isEmpty() != false) {
+                    coroutineScope.launch {
+                        snackbarHostState.showSnackbar("Please log in to view documents")
+                        navController.navigate("login") {
+                            popUpTo(navController.graph.startDestinationId) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                    }
+                    Timber.w("File list failed: No valid JWT")
+                } else {
+                    val fileList = listFilesService.listFiles("Bearer $token")
+                    files = fileList?.map { item ->
+                        item.copy(name = item.name.replace("+", " ").replace("%20", " ").trim())
+                    } ?: emptyList()
+                }
+            } catch (e: HttpException) {
+                Timber.tag("DocumentsScreen").e(e, "File list failed: HTTP ${e.code()} ${e.message()}")
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar("Failed to load files: HTTP ${e.code()}")
+                }
+            } catch (e: Exception) {
+                Timber.tag("DocumentsScreen").e(e, "File list failed: ${e.message}")
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar("Failed to load files: ${e.message ?: "Unknown error"}")
+                }
+            } finally {
+                isLoadingFiles = false
+                isRefreshing = false
+            }
+        }
+    }
 
     // Load files on composition
     LaunchedEffect(Unit) {
-        isLoadingFiles = true
-        try {
-            val token = PrefsHelper.getJwtToken(context)
-            if (token.isEmpty()) {
-                snackbarHostState.showSnackbar("Please Log-in to view documents")
-                Timber.w("File list failed: No valid JWT")
-            } else {
-                val fileList = listFilesService.listFiles("Bearer $token")
-                files = fileList?.map { item ->
-                    item.copy(name = item.name.replace("+", " ").replace("%20", " ").trim())
-                } ?: emptyList()
-                Timber.i("Fetched %d files", files.size)
-            }
-        } catch (e: HttpException) {
-            Timber.tag("DocumentsScreen").e(e, "File list failed: HTTP ${e.code()} ${e.message()}")
-            snackbarHostState.showSnackbar("Failed to load files: HTTP ${e.code()}")
-        } catch (e: Exception) {
-            snackbarHostState.showSnackbar("Failed to load files: ${e.message}")
-        } finally {
-            isLoadingFiles = false
-        }
+        loadFiles()
     }
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null && selectedDocumentType.isNotEmpty()) {
             isUploading = true
-            scope.launch {
+            coroutineScope.launch {
                 try {
-                    uploadFile(context, uri, selectedDocumentType, documentTypes, uploadService, isScanned = false)
-                    snackbarHostState.showSnackbar("Upload successful")
-                    // Reload file list
-                    val token = PrefsHelper.getJwtToken(context)
-                    if (!token.isEmpty()) {
-                        val fileList = listFilesService.listFiles("Bearer $token")
-                        files = fileList?.map { item ->
-                            item.copy(name = item.name.replace("+", " ").replace("%20", " ").trim())
-                        } ?: emptyList()
-                        Timber.i("Refreshed %d files", files.size)
+                    uploadFile(localContext, uri, selectedDocumentType, documentTypes, uploadService, isScanned = false)
+                    coroutineScope.launch {
+                        snackbarHostState.showSnackbar("Upload successful")
                     }
+                    // Reload file list
+                    loadFiles()
                 } catch (e: HttpException) {
                     Timber.tag("DocumentsScreen").e(e, "Upload failed: HTTP ${e.code()} ${e.message()}")
                     val errorBody = e.response()?.errorBody()?.string()
-                    snackbarHostState.showSnackbar("Upload failed: HTTP ${e.code()} ${errorBody ?: e.message()}")
+                    coroutineScope.launch {
+                        snackbarHostState.showSnackbar("Upload failed: HTTP ${e.code()} ${errorBody ?: e.message()}")
+                    }
                 } catch (e: Exception) {
-                    snackbarHostState.showSnackbar("Upload failed: ${e.message ?: "Unknown error"}")
+                    Timber.tag("DocumentsScreen").e(e, "Upload failed: ${e.message}")
+                    coroutineScope.launch {
+                        snackbarHostState.showSnackbar("Upload failed: ${e.message ?: "Unknown error"}")
+                    }
                 } finally {
                     isUploading = false
                 }
             }
         } else {
             Timber.w("File picker: Invalid uri=$uri or documentType=$selectedDocumentType")
+            coroutineScope.launch {
+                snackbarHostState.showSnackbar("Please select a file and document type")
+            }
         }
     }
 
@@ -148,27 +198,28 @@ fun DocumentsScreen(
                     try {
                         val pdfUri = result.pdf?.uri
                         if (pdfUri != null) {
-                            uploadFile(context, pdfUri, selectedDocumentType, documentTypes, uploadService, isScanned = true)
-                            snackbarHostState.showSnackbar("Scan and upload successful")
-                            // Reload file list
-                            val token = PrefsHelper.getJwtToken(context)
-                            if (!token.isEmpty()) {
-                                val fileList = listFilesService.listFiles("Bearer $token")
-                                files = fileList.map { item ->
-                                    item.copy(name = item.name.replace("+", " ").replace("%20", " ").trim())
-                                } ?: emptyList()
-                                Timber.i("Refreshed %d files", files.size)
+                            uploadFile(localContext, pdfUri, selectedDocumentType, documentTypes, uploadService, isScanned = true)
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("Scan and upload successful")
                             }
+                            // Reload file list
+                            loadFiles()
                         } else {
-                            snackbarHostState.showSnackbar("Failed to scan document")
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("Failed to scan document")
+                            }
                             Timber.tag("DocumentsScreen").e("Scanner failed: No PDF URI")
                         }
                     } catch (e: HttpException) {
-                        Timber.tag("DocumentsScreen").e("Upload failed: HTTP ${e.code()} ${e.message()}", e)
-                        val errorBody = e.response()?.errorBody()?.string()
-                        snackbarHostState.showSnackbar("Upload failed: HTTP ${e.code()} ${errorBody ?: e.message()}")
+                        Timber.tag("DocumentsScreen").e(e, "Upload failed: HTTP ${e.code()} ${e.message()}")
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar("Upload failed: HTTP ${e.code()} ${e.message()}")
+                        }
                     } catch (e: Exception) {
-                        snackbarHostState.showSnackbar("Upload failed: ${e.message ?: "Unknown error"}")
+                        Timber.tag("DocumentsScreen").e(e, "Upload failed: ${e.message}")
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar("Upload failed: ${e.message ?: "Unknown error"}")
+                        }
                     } finally {
                         isUploading = false
                     }
@@ -177,13 +228,15 @@ fun DocumentsScreen(
                 }
             } else if (activityResult.resultCode == Activity.RESULT_CANCELED) {
                 snackbarHostState.showSnackbar("Scan cancelled")
-                Timber.i("Scan cancelled")
             } else {
                 snackbarHostState.showSnackbar("Scan failed")
                 Timber.tag("DocumentsScreen").e("Scan failed: resultCode=${activityResult.resultCode}")
             }
         }
     }
+
+    // Swipe-to-refresh state
+    val refreshState = rememberPullToRefreshState()
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) }
@@ -197,15 +250,22 @@ fun DocumentsScreen(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             // Upload Section
-            Box {
+            Box(
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 OutlinedTextField(
                     value = selectedDocumentType,
                     onValueChange = { },
                     label = { Text("Select Document Type") },
                     modifier = Modifier.fillMaxWidth(),
                     readOnly = true,
+                    interactionSource = interactionSource,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.None),
                     trailingIcon = {
-                        IconButton(onClick = { expanded = true }) {
+                        IconButton(onClick = {
+                            expanded = true
+                            focusManager.clearFocus()
+                        }) {
                             Icon(
                                 imageVector = Icons.Default.ArrowDropDown,
                                 contentDescription = "Dropdown"
@@ -215,7 +275,13 @@ fun DocumentsScreen(
                 )
                 DropdownMenu(
                     expanded = expanded,
-                    onDismissRequest = { expanded = false }
+                    onDismissRequest = {
+                        expanded = false
+                        focusManager.clearFocus()
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .offset(y = 8.dp) // Slight offset to avoid clipping
                 ) {
                     documentTypes.forEach { (type, _) ->
                         DropdownMenuItem(
@@ -223,6 +289,8 @@ fun DocumentsScreen(
                             onClick = {
                                 selectedDocumentType = type
                                 expanded = false
+                                focusManager.clearFocus()
+                                Timber.d("DocumentsScreen: Selected document type: $type, expanded=$expanded")
                             }
                         )
                     }
@@ -239,20 +307,26 @@ fun DocumentsScreen(
                 Button(
                     onClick = {
                         if (selectedDocumentType.isEmpty()) {
-                            Toast.makeText(context, "Select a document type", Toast.LENGTH_SHORT).show()
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("Please select a document type")
+                            }
                             Timber.w("Scan failed: No document type selected")
                         } else {
-                            val token = PrefsHelper.getJwtToken(context)
-                            if (token.isEmpty()) {
-                                scope.launch {
-                                    snackbarHostState.showSnackbar("Please Log-in to scan documents")
+                            val token = PrefsHelper.getToken(localContext)
+                            if (token?.isEmpty() != false) {
+                                coroutineScope.launch {
+                                    snackbarHostState.showSnackbar("Please log in to scan documents")
+                                    navController.navigate("login") {
+                                        popUpTo(navController.graph.startDestinationId) { inclusive = true }
+                                        launchSingleTop = true
+                                    }
                                 }
                                 Timber.w("Scan failed: No valid JWT")
                             } else {
-                                val activity = context as? Activity
-                                if (activity != null) {
-                                    scope.launch {
-                                        try {
+                                coroutineScope.launch {
+                                    try {
+                                        val activity = localContext.findActivity()
+                                        if (activity != null) {
                                             scanner.getStartScanIntent(activity)
                                                 .addOnSuccessListener { intentSender ->
                                                     scannerLauncher.launch(
@@ -260,38 +334,50 @@ fun DocumentsScreen(
                                                     )
                                                 }
                                                 .addOnFailureListener { e ->
-                                                    scope.launch {
-                                                        snackbarHostState.showSnackbar("Failed to start scanner: ${e.message}")
+                                                    coroutineScope.launch {
+                                                        snackbarHostState.showSnackbar("Failed to start scanner: ${e.message ?: "Unknown error"}")
                                                     }
                                                 }
-                                        } catch (e: Exception) {
-                                            snackbarHostState.showSnackbar("Scanner error: ${e.message}")
+                                        } else {
+                                            coroutineScope.launch {
+                                                snackbarHostState.showSnackbar("Activity context required to start scanner")
+                                            }
+                                            Timber.tag("DocumentsScreen").e("Scan failed: No activity context")
                                         }
+                                    } catch (e: Exception) {
+                                        coroutineScope.launch {
+                                            snackbarHostState.showSnackbar("Scanner error: ${e.message ?: "Unknown error"}")
+                                        }
+                                        Timber.tag("DocumentsScreen").e(e, "Scanner error")
                                     }
-                                } else {
-                                    Toast.makeText(context, "Activity context required", Toast.LENGTH_SHORT).show()
-                                    Timber.tag("DocumentsScreen").e("Scan failed: No activity context")
                                 }
                             }
                         }
                     },
                     modifier = Modifier
                         .weight(1f)
-                        .padding(end = 4.dp)
-                ) {
-                    Text("Scan Document")
-                }
+                        .padding(end = 4.dp),
+                    content = {
+                        Text("Scan Document")
+                    }
+                )
 
                 Button(
                     onClick = {
                         if (selectedDocumentType.isEmpty()) {
-                            Toast.makeText(context, "Select a document type", Toast.LENGTH_SHORT).show()
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("Please select a document type")
+                            }
                             Timber.w("Upload failed: No document type selected")
                         } else {
-                            val token = PrefsHelper.getJwtToken(context)
-                            if (token.isEmpty()) {
-                                scope.launch {
-                                    snackbarHostState.showSnackbar("Please Log-in to upload documents")
+                            val token = PrefsHelper.getToken(localContext)
+                            if (token?.isEmpty() != false) {
+                                coroutineScope.launch {
+                                    snackbarHostState.showSnackbar("Please log in to upload documents")
+                                    navController.navigate("login") {
+                                        popUpTo(navController.graph.startDestinationId) { inclusive = true }
+                                        launchSingleTop = true
+                                    }
                                 }
                                 Timber.w("Upload failed: No valid JWT")
                             } else {
@@ -301,136 +387,131 @@ fun DocumentsScreen(
                     },
                     modifier = Modifier
                         .weight(1f)
-                        .padding(start = 4.dp)
-                ) {
-                    Text("Upload Document")
-                }
+                        .padding(start = 4.dp),
+                    content = {
+                        Text("Upload Document")
+                    }
+                )
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
             // File List Section
-            if (isLoadingFiles) {
-                CircularProgressIndicator()
-            } else if (files.isNotEmpty()) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "Uploaded Documents",
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        LazyColumn {
-                            items(files) { file ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    if (file.extension in listOf("jpg", "jpeg", "png")) {
-                                        AsyncImage(
-                                            model = file.url,
-                                            contentDescription = file.name,
-                                            modifier = Modifier.size(50.dp)
-                                        )
-                                    } else {
-                                        Icon(
-                                            imageVector = Icons.Default.PictureAsPdf,
-                                            contentDescription = file.name,
-                                            modifier = Modifier.size(50.dp)
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(file.name, modifier = Modifier.weight(1f))
-                                    IconButton(
-                                        onClick = {
-                                            val currentTime = System.currentTimeMillis()
-                                            val fullFilename = file.url.substringAfterLast("/").substringBefore("?").replace("+", " ").replace("%20", " ").trim()
-                                            if (currentTime - lastClickTime > 2000) { // Keep time-based debounce
-                                                lastClickTime = currentTime
-                                                var lastNavigatedFile = fullFilename
-                                                navigationAttemptCount++
-                                                Timber.d("DocumentsScreen: Navigation attempt $navigationAttemptCount for filename=$fullFilename")
+            PullToRefreshBox(
+                isRefreshing = isRefreshing,
+                onRefresh = {
+                    loadFiles()
+                },
+                state = refreshState,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                if (files.isNotEmpty()) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                text = "Uploaded Documents",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            LazyColumn {
+                                items(files) { file ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        if (file.extension in listOf("jpg", "jpeg", "png")) {
+                                            AsyncImage(
+                                                model = file.url,
+                                                contentDescription = file.name,
+                                                modifier = Modifier.size(50.dp)
+                                            )
+                                        } else {
+                                            Icon(
+                                                imageVector = Icons.Default.PictureAsPdf,
+                                                contentDescription = file.name,
+                                                modifier = Modifier.size(50.dp)
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(file.name, modifier = Modifier.weight(1f))
+                                        IconButton(
+                                            onClick = {
+                                                val currentTime = System.currentTimeMillis()
+                                                val fullFilename = file.url.substringAfterLast("/").substringBefore("?").replace("+", " ").replace("%20", " ").trim()
+                                                if (currentTime - lastClickTime > 2000) {
+                                                    lastClickTime = currentTime
+                                                    lastNavigatedFile = fullFilename // Keep for logging
+                                                    navigationAttemptCount++
+                                                    scope.launch {
+                                                        try {
+                                                            // Use the original filename from R2
+                                                            val encodedFilename = URLEncoder.encode(fullFilename, "UTF-8")
+                                                            val encodedUrl = URLEncoder.encode(file.url, "UTF-8")
+                                                           // Replace existing DocumentViewerScreen
+                                                            navController.navigate("documentViewer/$encodedFilename/$encodedUrl") {
+                                                                popUpTo("documentViewer/{filename}/{url}") { inclusive = true }
+                                                                launchSingleTop = true
+                                                                restoreState = false
+                                                            }
+                                                        } catch (e: Exception) {
+                                                            Timber.e(e, "DocumentsScreen: Navigation failed")
+                                                            snackbarHostState.showSnackbar("Navigation failed: ${e.message}")
+                                                        }
+                                                    }
+                                                } else {
+                                                    Timber.v("DocumentsScreen: Navigation debounced for filename=$fullFilename, lastClickTime=$lastClickTime, currentTime=$currentTime")
+                                                }
+                                            }
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Visibility,
+                                                contentDescription = "View ${file.name}"
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = {
                                                 scope.launch {
                                                     try {
-                                                        // Map to nickname for navigation
-                                                        val docTypeCode = documentTypes.find { fullFilename.endsWith("- ${it.second}.pdf") }?.second
-                                                            ?: documentTypes.find { fullFilename == "${it.first}.pdf" }?.second
-                                                        val nickname = docTypeCode?.let { documentTypes.find { it.second == docTypeCode }?.first } ?: fullFilename.substringBeforeLast(".")
-                                                        // Use the base filename without checking for existence
-                                                        val targetNickname = "$nickname.pdf" // Always use base filename, allowing overwrite
-                                                        val encodedFilename = URLEncoder.encode(targetNickname, "UTF-8")
-                                                        val encodedUrl = URLEncoder.encode(file.url, "UTF-8")
-                                                        Timber.d("DocumentsScreen: Navigating to DocumentViewer with filename: $targetNickname, URL: ${file.url}")
-                                                        // Clear previous documentViewer entries
-                                                        navController.popBackStack("documentViewer/{filename}/{url}", inclusive = true, saveState = false)
-                                                        navController.navigate("documentViewer/$encodedFilename/$encodedUrl") {
-                                                            popUpTo(navController.graph.startDestinationId) { saveState = true }
-                                                            launchSingleTop = true
-                                                            restoreState = false
-                                                        }
-
+                                                        val fullFilename = file.url.substringAfterLast("/").substringBefore("?").replace("+", " ").replace("%20", " ").trim()
+                                                        val downloadId = downloadFile(context, file.url, fullFilename.substringBeforeLast("."), fullFilename.substringAfterLast("."))
+                                                        snackbarHostState.showSnackbar("Downloading $fullFilename")
+                                                        (context.findActivity() as? MainActivity)?.storeDownload(downloadId, fullFilename)
                                                     } catch (e: Exception) {
-                                                        Timber.e(e, "DocumentsScreen: Navigation failed")
-                                                        snackbarHostState.showSnackbar("Navigation failed: ${e.message}")
+                                                        Timber.tag("DocumentsScreen").e(e, "Download failed")
+                                                        snackbarHostState.showSnackbar("Download failed: ${e.message}")
                                                     }
                                                 }
-                                            } else {
-                                                Timber.v("DocumentsScreen: Navigation debounced for filename=${file.name}, lastClickTime=$lastClickTime, currentTime=$currentTime")
                                             }
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Download,
+                                                contentDescription = "Download ${file.name}"
+                                            )
                                         }
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Visibility,
-                                            contentDescription = "View ${file.name}"
+                                    }
+                                    if (file != files.last()) {
+                                        HorizontalDivider(
+                                            modifier = Modifier.padding(horizontal = 8.dp),
+                                            thickness = 1.dp,
+                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
                                         )
                                     }
-                                    IconButton(
-                                        onClick = {
-                                            scope.launch {
-                                                try {
-                                                    val fullFilename = file.url.substringAfterLast("/").substringBefore("?").replace("+", " ").replace("%20", " ").trim()
-                                                    val docTypeCode = documentTypes.find { fullFilename.endsWith("- ${it.second}.pdf") }?.second
-                                                        ?: documentTypes.find { fullFilename == "${it.first}.pdf" }?.second
-                                                    val nickname = docTypeCode?.let { documentTypes.find { it.second == docTypeCode }?.first } ?: fullFilename.substringBeforeLast(".")
-                                                    val targetNickname = (0..10).map { i ->
-                                                        if (i == 0) "$nickname.pdf" else "$nickname-$i.pdf"
-                                                    }.find { nick ->
-                                                        !File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), nick).exists()
-                                                    } ?: fullFilename
-                                                    val downloadId = downloadFile(context, file.url, targetNickname.substringBeforeLast("."), targetNickname.substringAfterLast("."))
-                                                    snackbarHostState.showSnackbar("Downloading $targetNickname")
-                                                    (context.findActivity() as? MainActivity)?.storeDownload(downloadId, targetNickname)
-                                                } catch (e: Exception) {
-                                                    Timber.tag("DocumentsScreen").e(e, "Download failed")
-                                                    snackbarHostState.showSnackbar("Download failed: ${e.message}")
-                                                }
-                                            }
-                                        }
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Download,
-                                            contentDescription = "Download ${file.name}"
-                                        )
-                                    }
-                                }
-                                if (file != files.last()) {
-                                    HorizontalDivider(
-                                        modifier = Modifier.padding(horizontal = 8.dp),
-                                        thickness = 1.dp,
-                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
-                                    )
                                 }
                             }
                         }
                     }
+                } else {
+                    Text(
+                        text = "No documents found",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.align(Alignment.Center)
+                    )
                 }
-            } else {
-                Text("No documents found", style = MaterialTheme.typography.bodyMedium)
             }
 
             if (isUploading) {
@@ -449,7 +530,6 @@ private suspend fun uploadFile(
     uploadService: UploadService,
     isScanned: Boolean = false
 ) {
-    Timber.i("Starting upload")
     val contentResolver = context.contentResolver
     val (givenName, surname) = PrefsHelper.getWorkerDetails(context)
     val capitalizedGivenName = givenName.split(" ").joinToString(" ") { it.lowercase().replaceFirstChar { it -> it.uppercaseChar() } }
@@ -461,12 +541,13 @@ private suspend fun uploadFile(
     val extension = if (isScanned) {
         "pdf"
     } else {
-        when (contentResolver.getType(uri)?.lowercase()) {
+        val mimeType = contentResolver.getType(uri)?.lowercase()
+        when (mimeType) {
             "application/pdf" -> "pdf"
             "image/jpeg" -> "jpg"
             "image/png" -> "png"
             else -> {
-                Timber.tag("DocumentsScreen").e("Unsupported MIME type: %s", contentResolver.getType(uri))
+                Timber.tag("DocumentsScreen").e("Unsupported MIME type: %s", mimeType)
                 return
             }
         }
@@ -492,7 +573,7 @@ private suspend fun uploadFile(
     }
     val requestFile = tempFile.asRequestBody(contentType)
     val body = MultipartBody.Part.createFormData("file", fileName, requestFile)
-    val token = PrefsHelper.getJwtToken(context)
+    val token = PrefsHelper.getToken(context)
     try {
         val response = uploadService.uploadFile("Bearer $token", body)
     } catch (e: HttpException) {
@@ -506,15 +587,21 @@ private suspend fun uploadFile(
 
 private fun downloadFile(context: Context, url: String, name: String, extension: String): Long {
     val normalizedName = name.replace("+", " ").replace("%20", " ").trim()
+    val targetFilename = "$normalizedName.$extension"
+    val file = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), targetFilename)
+    if (file.exists()) {
+        file.delete()
+    }
     val request = DownloadManager.Request(url.toUri())
         .setTitle("Downloading $normalizedName")
-        .setDescription("Downloading $normalizedName.$extension")
-        .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "$normalizedName.$extension")
+        .setDescription("Downloading $targetFilename")
+        .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, targetFilename)
         .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
         .setAllowedOverMetered(true)
         .setAllowedOverRoaming(true)
     val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
     val downloadId = downloadManager.enqueue(request)
-    Timber.i("Started download: $normalizedName with ID: $downloadId")
+    Timber.i("Started download: $targetFilename with ID: $downloadId")
+    (context.findActivity() as? MainActivity)?.storeDownload(downloadId, targetFilename)
     return downloadId
 }

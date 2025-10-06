@@ -3,9 +3,16 @@ package com.empowerswr.luksave
 import com.google.gson.annotations.SerializedName
 import java.util.Date
 
-data class RegistrationRequest(val passport: String, val surname: String, val pin: String)
-data class LoginRequest(val workerId: String, val pin: String)
-data class LoginResponse(val token: String, val expiry: Long, val workerId: String)
+data class RegistrationRequest(val passport: String, val surname: String, val username: String, val pin: String)
+data class RegistrationResponse(val token: String, val workerId: String, val expiry: Long)
+data class LoginRequest(val workerIdOrUsername: String, val pin: String)
+
+data class LoginResponse(
+    val token: String,
+    val expiry: Long,
+    val workerId: String,
+    val username: String?)
+
 data class WorkerResponse(
     val ID: String?,
     val firstName: String?,
@@ -25,6 +32,7 @@ data class WorkerResponse(
     val dLClass: String?,
     val dLicenceExp: String?,
     val notices: String?,
+    val contract: String?,
     val ppno: String?,
     val birthplace: String?,
     val birthProvince: String?,
@@ -47,24 +55,14 @@ data class CheckInRequest(
     val latitude: Double? = null,
     val longitude: Double? = null
 )
-
-data class LocationResponse(val success: Boolean, val message: String?)
 data class CheckInResponse(val success: Boolean, val message: String? = null)
-
 data class LocationRequest(
     val worker_id: String,
     val latitude: Double,
     val longitude: Double,
     val action: String
 )
-
-data class RegistrationResponse(
-    val token: String,
-    val workerId: String,
-    val expiry: Long
-)
-
-
+data class LocationResponse(val success: Boolean, val message: String?)
 data class FlightDetails(
     @SerializedName("flightID") val flightID: Int,
     @SerializedName("intDepDate") val intDepDate: String,
@@ -88,7 +86,7 @@ data class FlightDetails(
 )
 data class PdbDetails(
     @SerializedName("startDate") val startDate: String?,
-    @SerializedName("endDate") val endDate: String? = null, // Optional, hidden if schemes = 'RSE'
+    @SerializedName("endDate") val endDate: String? = null,
     @SerializedName("location") val location: String?,
     @SerializedName("pdbLocationLong") val pdbLocationLong: String?,
     @SerializedName("schemes") val schemes: String?,
@@ -104,7 +102,6 @@ data class PdbUpdateResponse(
     @SerializedName("message") val message: String?,
     @SerializedName("error") val error: String? = null
 )
-
 data class DirectoryEntry(
     val dirID: Int,
     val dirName: String,
@@ -116,7 +113,6 @@ data class DirectoryEntry(
     val dirEmail: String?,
     val dirCard: String
 )
-
 data class Team(
     @SerializedName("teamId") val teamId: Int,
     @SerializedName("teamName") val teamName: String?,
@@ -156,7 +152,6 @@ data class Team(
     @SerializedName("ArrivalDate") val arrivalDate: String?,
     @SerializedName("employer") val employer: String?
 )
-
 data class TeamLocation(
     @SerializedName("googlemapAddress") val googleMapAddress: String?,
     @SerializedName("farmGPSLat") val farmGPSLat: Float?,
@@ -164,14 +159,32 @@ data class TeamLocation(
     @SerializedName("farmCrop") val farmCrop: String?,
     @SerializedName("farmName") val farmName: String?
 )
-
 data class FeedbackRequest(
     val workerId: String,
     val teamId: Int?,
     val feedbackText: String,
     val screen: String?
 )
-
 data class FeedbackResponse(
     @SerializedName("message") val message: String
+)
+
+data class SignContractRequest(
+    val workerId: String
+)
+
+data class SignContractResponse(
+    val success: Boolean,
+    val message: String? = null,
+    val error: String? = null
+)
+
+data class UpdateUsernameRequest(
+    val workerId: String,
+    val username: String
+)
+
+data class UpdateUsernameResponse(
+    val success: Boolean,
+    val message: String? // e.g., "Username updated" or "Username already taken"
 )

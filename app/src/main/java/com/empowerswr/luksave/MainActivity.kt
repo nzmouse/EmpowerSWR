@@ -29,30 +29,9 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TopAppBar
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -60,10 +39,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import androidx.core.net.toUri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -74,82 +51,89 @@ import com.empowerswr.luksave.network.NetworkModule
 import com.empowerswr.luksave.ui.screens.*
 import com.empowerswr.luksave.ui.theme.EmpowerSWRTheme
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
 import timber.log.Timber
 import java.io.File
 
 class MainActivity : ComponentActivity() {
-    private val downloadIds = mutableMapOf<Long, String>()
-    val downloadState = mutableStateOf<DownloadState>(DownloadState.Idle)
+    private val downloadMap = mutableMapOf<Long, String>()
+    private val _downloadCompleteFlow = MutableSharedFlow<Pair<Long, String>>(replay = 1)
+    val downloadCompleteFlow = _downloadCompleteFlow.asSharedFlow()
+
+    companion object {
+        val downloadCompleteFlowInternal: MutableSharedFlow<Pair<Long, String>> by lazy { MutableSharedFlow(replay = 1) }
+    }
 
     fun storeDownload(downloadId: Long, filename: String) {
-        downloadIds[downloadId] = filename
+        downloadMap[downloadId] = filename
+        Timber.d("MainActivity: Stored download ID: $downloadId for filename: $filename")
+    }
+
+    fun getDownloadFilename(downloadId: Long): String? {
+        return downloadMap[downloadId]
+    }
+
+    fun removeDownload(downloadId: Long) {
+        downloadMap.remove(downloadId)
+        Timber.d("MainActivity: Removed download ID: $downloadId")
     }
 
     private val downloadReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
+            Timber.d("MainActivity: Broadcast received, action: ${intent?.action}")
             val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1) ?: -1
-            val filename = downloadIds[id] ?: return
-            val downloadManager = context?.getSystemService(DOWNLOAD_SERVICE) as? DownloadManager
-            val query = DownloadManager.Query().setFilterById(id)
-            downloadManager?.query(query)?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-                    if (status == DownloadManager.STATUS_SUCCESSFUL) {
-                        val localUri = cursor.getString(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI))
-                        val file = if (localUri != null) File(localUri.toUri().path ?: return@use) else null
-                        val normalizedFilename = filename.replace("+", " ").replace("%20", " ").trim()
-                        val foundFile = file?.takeIf { it.exists() } ?: File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), normalizedFilename)
-                        if (foundFile.exists()) {
-                            downloadState.value = DownloadState.Completed(normalizedFilename)
-                        } else {
-                            downloadState.value = DownloadState.Failed(normalizedFilename, "File not found")
-                            Timber.e("Downloaded file not found: ${foundFile.absolutePath}")
-                        }
-                    } else {
-                        val reason = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
-                        downloadState.value = DownloadState.Failed(filename, "Status $status, Reason $reason")
-                        Timber.e("Download failed with status: $status, reason: $reason")
-                    }
+            Timber.d("MainActivity: Broadcast download ID: $id")
+            val filename = getDownloadFilename(id)
+            if (filename != null) {
+                val file = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), filename.replace("+", " ").replace("%20", " ").trim())
+                Timber.d("MainActivity: Checking file: ${file.absolutePath}, exists: ${file.exists()}, size: ${file.length()}")
+                if (file.exists() && file.length() > 0 && file.extension.lowercase() == "pdf") {
+                    _downloadCompleteFlow.tryEmit(id to filename)
+                    downloadCompleteFlowInternal.tryEmit(id to filename)
+                    Timber.i("MainActivity: Emitted download complete for ID: $id, filename: $filename")
                 } else {
-                    downloadState.value = DownloadState.Failed(filename, "Download query failed")
-                    Timber.e("Download query returned empty cursor")
+                    Timber.e("MainActivity: File invalid: exists=${file.exists()}, size=${file.length()}, extension=${file.extension}")
                 }
-            } ?: run {
-                downloadState.value = DownloadState.Failed(filename, "Download manager unavailable")
-                Timber.e("Download manager is null")
+                removeDownload(id)
+            } else {
+                Timber.w("MainActivity: No filename found for download ID: $id")
             }
-            downloadIds.remove(id)
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Initialize ViewModel early
-        val viewModel = ViewModelProvider(this, object : ViewModelProvider.Factory {
-            override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                return EmpowerViewModel(application) as T
+        // Register BroadcastReceiver
+        val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE).apply {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                addDataScheme("content")
+                addDataScheme("file")
             }
-        })[EmpowerViewModel::class.java]
-
-        // Process initial intent
-        handleIntent(intent, viewModel)
-
-        val filter = IntentFilter().apply {
-            addAction(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
-            addAction(DownloadManager.ACTION_NOTIFICATION_CLICKED)
-            addAction(DownloadManager.ACTION_VIEW_DOWNLOADS)
         }
-        ContextCompat.registerReceiver(
-            this,
-            downloadReceiver,
-            filter,
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) ContextCompat.RECEIVER_NOT_EXPORTED else ContextCompat.RECEIVER_EXPORTED
-        )
+        Timber.d("MainActivity: Registering download receiver")
+        try {
+            val receiverFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                Context.RECEIVER_NOT_EXPORTED
+            } else {
+                ContextCompat.RECEIVER_EXPORTED
+            }
+            registerReceiver(downloadReceiver, filter, receiverFlags)
+            Timber.i("MainActivity: Download receiver registered successfully")
+        } catch (e: Exception) {
+            Timber.e(e, "MainActivity: Failed to register download receiver")
+        }
         setContent {
             EmpowerSWRTheme {
-                NavigationSetup(viewModel)
+                val viewModel = ViewModelProvider(this, object : ViewModelProvider.Factory {
+                    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                        return EmpowerViewModel(application) as T
+                    }
+                })[EmpowerViewModel::class.java]
+                NavigationSetup(viewModel = viewModel, downloadCompleteFlow = downloadCompleteFlow)
             }
         }
     }
@@ -157,7 +141,6 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        // Use the same ViewModel instance
         val viewModel = ViewModelProvider(this, object : ViewModelProvider.Factory {
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 return EmpowerViewModel(application) as T
@@ -180,8 +163,9 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
         try {
             unregisterReceiver(downloadReceiver)
+            Timber.d("MainActivity: Unregistered download receiver")
         } catch (e: IllegalArgumentException) {
-            Timber.e(e, "Receiver not registered")
+            Timber.e(e, "MainActivity: Receiver not registered")
         }
     }
 }
@@ -216,7 +200,7 @@ fun Context.findActivity(): Activity? {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 @Suppress("UNCHECKED_CAST")
-fun NavigationSetup(viewModel: EmpowerViewModel) {
+fun NavigationSetup(viewModel: EmpowerViewModel, downloadCompleteFlow: SharedFlow<Pair<Long, String>>) {
     val navController = rememberNavController()
     val context = LocalContext.current
     val token by viewModel.token
@@ -225,7 +209,6 @@ fun NavigationSetup(viewModel: EmpowerViewModel) {
     val currentDestination = currentRoute?.destination?.route
     var showLogoutDialog by remember { mutableStateOf(false) }
     var initialNavigationDone by rememberSaveable { mutableStateOf(false) }
-    val downloadState = mutableStateOf<DownloadState>(DownloadState.Idle)
     val snackbarHostState = remember { SnackbarHostState() }
     val workerId = PrefsHelper.getWorkerId(context) ?: ""
     val coroutineScope = rememberCoroutineScope()
@@ -233,8 +216,14 @@ fun NavigationSetup(viewModel: EmpowerViewModel) {
     var feedbackText by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
 
-    LaunchedEffect(token, currentDestination) {
-        if (token != null && !initialNavigationDone && (currentDestination == "login" || currentDestination == null)) {
+    LaunchedEffect(token, currentDestination, showLogoutDialog) {
+        if (token == null && !showLogoutDialog && currentDestination != "login" && currentDestination != "registration") {
+            navController.navigate("login") {
+                popUpTo(navController.graph.startDestinationId) { inclusive = true }
+                launchSingleTop = true
+            }
+            initialNavigationDone = false
+        } else if (token != null && !initialNavigationDone && (currentDestination == "login" || currentDestination == null)) {
             delay(500)
             navController.navigate("home") {
                 popUpTo(navController.graph.startDestinationId) { inclusive = true }
@@ -251,8 +240,7 @@ fun NavigationSetup(viewModel: EmpowerViewModel) {
             text = { Text("Are you sure you want to log out? Ensure no other users need to use this device.") },
             confirmButton = {
                 TextButton(onClick = {
-                    PrefsHelper.clearToken(context)
-                    viewModel.logout()
+                    viewModel.logout(context)
                     showLogoutDialog = false
                     initialNavigationDone = false
                     navController.navigate("login") {
@@ -271,7 +259,6 @@ fun NavigationSetup(viewModel: EmpowerViewModel) {
         )
     }
 
-    // Feedback Dialog
     if (showFeedbackDialog) {
         AlertDialog(
             onDismissRequest = {
@@ -293,43 +280,40 @@ fun NavigationSetup(viewModel: EmpowerViewModel) {
                 }
             },
             confirmButton = {
+                val context = LocalContext.current
+                var errorMessage by remember { mutableStateOf<String?>(null) }
+                var navigateToLogin by remember { mutableStateOf(false) }
                 TextButton(
                     onClick = {
-                        if (feedbackText.isNotBlank() && token != null && workerId.isNotEmpty()) {
+                        if (feedbackText.isNotBlank()) {
                             isLoading = true
                             coroutineScope.launch {
                                 try {
-                                    viewModel.submitFeedback(token!!, workerId, 0, feedbackText, currentDestination)
-                                    snackbarHostState.showSnackbar("Feedback submitted successfully")
+                                    viewModel.submitFeedback(context, 0, feedbackText, currentDestination)
+                                    errorMessage = "Feedback submitted successfully"
                                     showFeedbackDialog = false
                                     feedbackText = ""
                                 } catch (e: HttpException) {
-                                    val errorMessage = when (e.code()) {
+                                    errorMessage = when (e.code()) {
                                         400 -> "Invalid input. Please check feedback text."
-                                        401 -> "Invalid or expired token. Please log in again."
+                                        401 -> {
+                                            navigateToLogin = true
+                                            "Unauthorized. Please log in again."
+                                        }
                                         403 -> "Unauthorized for this worker."
                                         500 -> "Server error. Please try again later."
                                         else -> "Failed to submit feedback: ${e.message()}"
                                     }
                                     Timber.tag("NavigationSetup").e(e, "Feedback submission failed: %s", errorMessage)
-                                    snackbarHostState.showSnackbar(errorMessage)
-                                    if (e.code() == 401) {
-                                        navController.navigate("login") {
-                                            popUpTo(navController.graph.startDestinationId) { inclusive = true }
-                                            launchSingleTop = true
-                                        }
-                                    }
                                 } catch (e: Exception) {
+                                    errorMessage = "Failed to submit feedback: ${e.message ?: "Unknown error"}"
                                     Timber.tag("NavigationSetup").e(e, "Unexpected error during feedback submission")
-                                    snackbarHostState.showSnackbar("Failed to submit feedback: ${e.message ?: "Unknown error"}")
                                 } finally {
                                     isLoading = false
                                 }
                             }
                         } else {
-                            coroutineScope.launch {
-                                snackbarHostState.showSnackbar("Please enter feedback text")
-                            }
+                            errorMessage = "Please enter feedback text"
                         }
                     },
                     enabled = feedbackText.isNotBlank() && !isLoading
@@ -345,6 +329,21 @@ fun NavigationSetup(viewModel: EmpowerViewModel) {
                             )
                         }
                         Text("Submit")
+                    }
+                }
+                LaunchedEffect(errorMessage) {
+                    errorMessage?.let {
+                        snackbarHostState.showSnackbar(it)
+                        errorMessage = null
+                    }
+                }
+                LaunchedEffect(navigateToLogin) {
+                    if (navigateToLogin) {
+                        navController.navigate("login") {
+                            popUpTo(navController.graph.startDestinationId) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                        navigateToLogin = false
                     }
                 }
             },
@@ -373,7 +372,7 @@ fun NavigationSetup(viewModel: EmpowerViewModel) {
                         text = if (token == null) "Empower SWR - Login"
                         else workerDetails?.firstName ?: "Worker ID: ${PrefsHelper.getWorkerId(context) ?: "Unknown"}",
                         style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.primary
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 },
                 actions = {
@@ -382,7 +381,7 @@ fun NavigationSetup(viewModel: EmpowerViewModel) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.Comment,
                                 contentDescription = "Feedback",
-                                tint = MaterialTheme.colorScheme.primary
+                                tint = MaterialTheme.colorScheme.onSurface
                             )
                         }
                         IconButton(onClick = {
@@ -395,14 +394,14 @@ fun NavigationSetup(viewModel: EmpowerViewModel) {
                             Icon(
                                 imageVector = Icons.Default.Settings,
                                 contentDescription = "Open Settings",
-                                tint = MaterialTheme.colorScheme.primary
+                                tint = MaterialTheme.colorScheme.onSurface
                             )
                         }
                         IconButton(onClick = { showLogoutDialog = true }) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.ExitToApp,
                                 contentDescription = "Logout",
-                                tint = MaterialTheme.colorScheme.primary
+                                tint = MaterialTheme.colorScheme.onSurface
                             )
                         }
                     }
@@ -493,7 +492,8 @@ fun NavigationSetup(viewModel: EmpowerViewModel) {
                 DocumentsScreen(
                     uploadService = NetworkModule.uploadService,
                     listFilesService = NetworkModule.listFilesService,
-                    navController = navController
+                    navController = navController,
+                    downloadCompleteFlow = downloadCompleteFlow
                 )
             }
             composable(
@@ -510,7 +510,7 @@ fun NavigationSetup(viewModel: EmpowerViewModel) {
                     filename = filename,
                     url = url,
                     listFilesService = NetworkModule.listFilesService,
-                    downloadState = downloadState
+                    downloadCompleteFlow = downloadCompleteFlow
                 )
             }
             composable("edit_personal") {
@@ -531,7 +531,7 @@ fun NavigationSetup(viewModel: EmpowerViewModel) {
                     navController = navController
                 )
             }
-            composable("settings") {
+            composable("settings dancer") {
                 SettingsScreen(navController = navController)
             }
         }

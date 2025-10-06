@@ -38,7 +38,12 @@ fun InformationScreen(
     val coroutineScope = rememberCoroutineScope()
     var fetchError by remember { mutableStateOf<String?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
+    val localContext = LocalContext.current
 
+    // Log screen usage
+    LaunchedEffect(Unit) {
+        Timber.i("ScreenUsage: InformationScreen displayed, workerId=${PrefsHelper.getWorkerId(context) ?: "unknown"}, timestamp=${System.currentTimeMillis()}")
+    }
     // Debug: Log token and workerId
     LaunchedEffect(token, workerId) {
         if (token == null || workerId.isEmpty()) {
@@ -47,8 +52,9 @@ fun InformationScreen(
                 launchSingleTop = true
             }
         } else {
+
             try {
-                viewModel.fetchDirectory(token!!, workerId)
+                viewModel.fetchDirectory(localContext)
                 fetchError = null
             } catch (e: HttpException) {
                 val errorMessage = when (e.code()) {
@@ -117,9 +123,9 @@ fun InformationScreen(
                 Button(
                     onClick = {
                         coroutineScope.launch {
-                            if (token != null && workerId.isNotEmpty()) {
+                            if (workerId.isNotEmpty()) {
                                 try {
-                                    viewModel.fetchDirectory(token!!, workerId)
+                                    viewModel.fetchDirectory(localContext)
                                     fetchError = null
                                 } catch (e: HttpException) {
                                     val errorMessage = when (e.code()) {

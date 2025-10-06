@@ -4,10 +4,12 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.location.Location
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -19,10 +21,13 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
@@ -37,6 +42,42 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import timber.log.Timber
 
+// Define helper function before HomeScreen to avoid unresolved reference
+private suspend fun handleUsernameSubmission(
+    usernameInput: String,
+    viewModel: EmpowerViewModel,
+    context: Context,
+    keyboardController: SoftwareKeyboardController?,
+    onSuccess: () -> Unit,
+    onError: (String) -> Unit
+) {
+    Timber.d("HomeScreen: Username prompt: Starting submission for '$usernameInput'")
+    try {
+        keyboardController?.hide() // Hide keyboard safely
+        val workerId = PrefsHelper.getWorkerId(context)
+        if (workerId.isNullOrEmpty()) {
+            Timber.e("HomeScreen: Username prompt: No workerId, prompting re-login")
+            onError("Session expired. Please log in again.")
+            return
+        }
+        viewModel.updateUsername(
+            usernameInput,
+            context,
+            onSuccess = {
+                Timber.d("HomeScreen: Username prompt: Update successful for '$usernameInput'")
+                onSuccess()
+            },
+            onError = { error ->
+                Timber.e("HomeScreen: Username prompt: Update failed - $error")
+                onError(error)
+            }
+        )
+    } catch (e: Exception) {
+        Timber.e(e, "HomeScreen: Username prompt: Unexpected error during submission")
+        onError("Failed to update username: ${e.message}")
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
@@ -50,22 +91,35 @@ fun HomeScreen(
     var fcmError by remember { mutableStateOf<String?>(null) }
     var refreshError by remember { mutableStateOf<String?>(null) }
     var locationError by remember { mutableStateOf<String?>(null) }
+    var contractError by remember { mutableStateOf<String?>(null) }
     var isCheckingIn by remember { mutableStateOf(false) }
     var isFindingMe by remember { mutableStateOf(false) }
+    var isSigningContract by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val token by viewModel.token
     val workerDetails by viewModel.workerDetails
     val checkInSuccess by viewModel.checkInSuccess
+    val contractSuccess by viewModel.contractSuccess
+    var showContractCard by remember { mutableStateOf(true) }
+    val showUsernamePrompt by viewModel.showUsernamePrompt
+    var usernameInput by rememberSaveable { mutableStateOf("") }
+    var usernameError by remember { mutableStateOf<String?>(null) }
+    var showUsernameSuccess by remember { mutableStateOf(false) }
     val checkInError by viewModel.checkInError
     val notifications by viewModel.notifications
     val notificationFromIntent by viewModel.notificationFromIntent
-    val isPhoneInputValid by remember { derivedStateOf { phone.matches(Regex("^\\d*$")) } }
     val isPhoneSubmitValid by remember { derivedStateOf { phone.matches(Regex("^\\d{7,15}$")) } }
     var showCheckInSection by remember { mutableStateOf(true) }
     var isRefreshing by remember { mutableStateOf(false) }
     var showSettingsPrompt by remember { mutableStateOf(false) }
     val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
+    val localContext = LocalContext.current
+
+    // Log screen usage
+    LaunchedEffect(Unit) {
+        Timber.i("ScreenUsage: HomeScreen displayed, workerId=${PrefsHelper.getWorkerId(context) ?: "unknown"}, timestamp=${System.currentTimeMillis()}")
+    }
     context.findEmpowerActivity() ?: run {
         throw IllegalStateException("HomeScreen must be called within a ComponentActivity")
     }
@@ -76,7 +130,7 @@ fun HomeScreen(
     ) { permissions ->
         val fineGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true
         val coarseGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
-        Timber.i("Location Permission result: fineGranted= %b, coarseGranted= %b", fineGranted, coarseGranted)
+        Timber.i("Location Permission result: fineGranted=%b, coarseGranted=%b", fineGranted, coarseGranted)
         if (fineGranted || coarseGranted) {
             locationError = null
         } else {
@@ -93,8 +147,7 @@ fun HomeScreen(
         if (ContextCompat.checkSelfPermission(
                 context,
                 Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
-        ) {
+            ) == PackageManager.PERMISSION_GRANTED) {
             locationError = null
             Timber.i("Location permission granted after settings")
         } else {
@@ -109,8 +162,7 @@ fun HomeScreen(
         if (ContextCompat.checkSelfPermission(
                 context,
                 Manifest.permission.ACCESS_FINE_LOCATION
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
+            ) != PackageManager.PERMISSION_GRANTED) {
             permissionLauncher.launch(arrayOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,
                 Manifest.permission.ACCESS_COARSE_LOCATION
@@ -123,8 +175,7 @@ fun HomeScreen(
         if (ContextCompat.checkSelfPermission(
                 context,
                 Manifest.permission.ACCESS_FINE_LOCATION
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
+            ) != PackageManager.PERMISSION_GRANTED) {
             permissionLauncher.launch(arrayOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,
                 Manifest.permission.ACCESS_COARSE_LOCATION
@@ -168,8 +219,11 @@ fun HomeScreen(
     LaunchedEffect(token) {
         if (token == null) {
             Timber.tag("HomeScreen").e("No token, redirecting to login")
+            navController.navigate("login") {
+                popUpTo("home") { inclusive = true }
+            }
         } else {
-            viewModel.fetchWorkerDetails { error ->
+            viewModel.fetchWorkerDetails(context) { error ->
                 error?.message ?: "Failed to load worker details"
             }
         }
@@ -180,10 +234,10 @@ fun HomeScreen(
         FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
             if (task.isSuccessful) {
                 val fcmToken = task.result
-                PrefsHelper.saveFcmToken(context, fcmToken)
-                val workerId = PrefsHelper.getWorkerId(context)
+                PrefsHelper.saveFcmToken(localContext, fcmToken)
+                val workerId = PrefsHelper.getWorkerId(localContext)
                 if (workerId != null) {
-                    viewModel.updateFcmToken(fcmToken, workerId)
+                    viewModel.updateFcmToken(fcmToken, localContext)
                 } else {
                     Timber.tag("HomeScreen").e("No workerId available for FCM token update")
                 }
@@ -194,7 +248,7 @@ fun HomeScreen(
         }
     }
 
-    // Handle notifications from ViewModel (likely from NotificationHandler)
+    // Handle notifications from ViewModel
     LaunchedEffect(notifications) {
         notifications.forEach { notification ->
             snackbarScope.launch {
@@ -214,7 +268,6 @@ fun HomeScreen(
 
     // Handle intent-based notifications
     LaunchedEffect(notificationFromIntent) {
-        Timber.i("notificationFromIntent: $notificationFromIntent")
         notificationFromIntent?.let { (title, body) ->
             if (title != null && body != null && title.isNotBlank() && body.isNotBlank()) {
                 snackbarScope.launch {
@@ -223,7 +276,7 @@ fun HomeScreen(
                         snackbarHostState.showSnackbar(
                             message = "$title: $body",
                             actionLabel = "Dismiss",
-                            duration = SnackbarDuration.Long // Auto-dismiss for testing
+                            duration = SnackbarDuration.Long
                         )
                         viewModel.setNotificationFromIntent(null, null)
                     } catch (e: Exception) {
@@ -236,8 +289,9 @@ fun HomeScreen(
         }
     }
 
-    LaunchedEffect(refreshError, locationError) {
-        val error = refreshError ?: locationError
+    // Handle errors (refresh, location, contract)
+    LaunchedEffect(refreshError, locationError, contractError) {
+        val error = refreshError ?: locationError ?: contractError
         error?.let {
             snackbarScope.launch {
                 try {
@@ -248,6 +302,7 @@ fun HomeScreen(
                     )
                     if (it == refreshError) refreshError = null
                     if (it == locationError) locationError = null
+                    if (it == contractError) contractError = null
                 } catch (e: Exception) {
                     Timber.tag("HomeScreen").e(e, "Failed to show error Snackbar")
                 }
@@ -261,7 +316,12 @@ fun HomeScreen(
             isCheckingIn = false
         }
     }
-
+    LaunchedEffect(contractSuccess) {
+        if (contractSuccess == true) {
+            isSigningContract = false
+            showContractCard = false
+        }
+    }
     LaunchedEffect(checkInError) {
         checkInError?.let { message ->
             snackbarScope.launch {
@@ -281,6 +341,24 @@ fun HomeScreen(
         }
     }
 
+    // Show snackbar for username success
+    LaunchedEffect(showUsernameSuccess) {
+        if (showUsernameSuccess) {
+            try {
+                snackbarHostState.showSnackbar(
+                    message = "Username set successfully.  You can now use your username to log in!",
+                    actionLabel = "Dismiss",
+                    duration = SnackbarDuration.Short
+                )
+
+            } catch (e: Exception) {
+                Timber.e(e, "HomeScreen: Username prompt: Failed to show snackbar")
+                usernameError = "Failed to show confirmation: ${e.message}"
+            }
+            showUsernameSuccess = false
+        }
+    }
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
@@ -290,7 +368,7 @@ fun HomeScreen(
                 coroutineScope.launch {
                     try {
                         isRefreshing = true
-                        viewModel.fetchWorkerDetails { error ->
+                        viewModel.fetchWorkerDetails(context) { error ->
                             refreshError = error?.message?.let { "Refresh failed: $it" } ?: "Refresh failed"
                             isRefreshing = false
                         }
@@ -341,6 +419,9 @@ fun HomeScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.inversePrimary
+                        ),
                         enabled = !isFindingMe
                     ) {
                         Text("Find Me")
@@ -359,7 +440,8 @@ fun HomeScreen(
                                     ),
                                 elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
                                 colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.errorContainer
+                                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                                    contentColor = MaterialTheme.colorScheme.onErrorContainer
                                 )
                             ) {
                                 Column(
@@ -367,10 +449,10 @@ fun HomeScreen(
                                     horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
                                     Text(
-                                        text = "IMPORTANT: Mifala traem faendem yu naoia. Kolem ofis long 34357 NAOIA.",
+                                        text = "IMPORTANT: Mifala traem faendem yu naoia. Kolem ofis long 34357.",
                                         style = MaterialTheme.typography.bodyLarge,
-                                        color = MaterialTheme.colorScheme.error,
-                                        fontWeight = FontWeight.Bold
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onErrorContainer
                                     )
                                     Spacer(modifier = Modifier.height(12.dp))
                                     OutlinedTextField(
@@ -381,6 +463,7 @@ fun HomeScreen(
                                             }
                                         },
                                         label = { Text("Fon namba blong yu") },
+                                        isError = phone.isNotEmpty() && !isPhoneSubmitValid,
                                         keyboardOptions = KeyboardOptions(
                                             keyboardType = KeyboardType.Phone,
                                             imeAction = ImeAction.Done
@@ -408,9 +491,15 @@ fun HomeScreen(
                                         modifier = Modifier.fillMaxWidth(),
                                         colors = TextFieldDefaults.colors(
                                             focusedIndicatorColor = MaterialTheme.colorScheme.error,
-                                            unfocusedIndicatorColor = MaterialTheme.colorScheme.error
+                                            unfocusedIndicatorColor = MaterialTheme.colorScheme.error,
+                                            focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                            unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                                            focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                                            unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                                            errorContainerColor = MaterialTheme.colorScheme.surface,
+                                            errorTextColor = MaterialTheme.colorScheme.onSurface
                                         ),
-                                        enabled = isPhoneInputValid || phone.isEmpty()
+                                        enabled = !isCheckingIn
                                     )
                                     Spacer(modifier = Modifier.height(12.dp))
                                     Button(
@@ -434,11 +523,60 @@ fun HomeScreen(
                                         },
                                         modifier = Modifier.fillMaxWidth(),
                                         colors = ButtonDefaults.buttonColors(
-                                            containerColor = MaterialTheme.colorScheme.error
+                                            containerColor = MaterialTheme.colorScheme.inversePrimary,
+                                            contentColor = MaterialTheme.colorScheme.onPrimary
                                         ),
                                         enabled = isPhoneSubmitValid && !isCheckingIn
                                     ) {
                                         Text("Check In", style = MaterialTheme.typography.labelLarge)
+                                    }
+                                }
+                            }
+                        }
+                        if (worker.contract == "Ready to Sign" && showContractCard) {
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp)
+                                    .border(
+                                        2.dp,
+                                        MaterialTheme.colorScheme.primary,
+                                        MaterialTheme.shapes.medium
+                                    ),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surface,
+                                    contentColor = MaterialTheme.colorScheme.onSurface
+                                )
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(16.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text(
+                                        text = "ACTION REQUIRED: Your contract is ready to sign!",
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Button(
+                                        onClick = {
+                                            if (!isSigningContract) {
+                                                coroutineScope.launch {
+                                                    isSigningContract = true
+                                                    viewModel.signContract(context)
+                                                }
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.inversePrimary,
+                                            contentColor = MaterialTheme.colorScheme.onPrimary
+                                        ),
+                                        enabled = !isSigningContract
+                                    ) {
+                                        Text("Sign Contract Now", style = MaterialTheme.typography.labelLarge)
                                     }
                                 }
                             }
@@ -455,7 +593,8 @@ fun HomeScreen(
                                     ),
                                 elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
                                 colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.surfaceContainer
+                                    containerColor = MaterialTheme.colorScheme.surface,
+                                    contentColor = MaterialTheme.colorScheme.onSurface
                                 )
                             ) {
                                 Column(
@@ -465,7 +604,7 @@ fun HomeScreen(
                                     Text(
                                         text = "You have checked in and the office is notified",
                                         style = MaterialTheme.typography.bodyLarge,
-                                        color = MaterialTheme.colorScheme.primary,
+                                        color = MaterialTheme.colorScheme.onSurface,
                                         fontWeight = FontWeight.Bold
                                     )
                                     Spacer(modifier = Modifier.height(8.dp))
@@ -478,7 +617,7 @@ fun HomeScreen(
                                                 .fillMaxWidth()
                                                 .padding(vertical = 8.dp),
                                             colors = ButtonDefaults.buttonColors(
-                                                containerColor = MaterialTheme.colorScheme.primary
+                                                containerColor = MaterialTheme.colorScheme.inversePrimary
                                             )
                                         ) {
                                             Text(
@@ -486,20 +625,6 @@ fun HomeScreen(
                                                 style = MaterialTheme.typography.labelLarge
                                             )
                                         }
-                                    }
-                                    Spacer(modifier = Modifier.height(12.dp))
-                                    Button(
-                                        onClick = {
-                                            navController.navigate("team")
-                                        },
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(vertical = 8.dp),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = MaterialTheme.colorScheme.primary
-                                        )
-                                    ) {
-                                        Text("View and Accept your New Job!", style = MaterialTheme.typography.labelLarge)
                                     }
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
@@ -544,7 +669,8 @@ fun HomeScreen(
                                 ),
                             elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
                             colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceContainer
+                                containerColor = MaterialTheme.colorScheme.surface,
+                                contentColor = MaterialTheme.colorScheme.onSurface
                             )
                         ) {
                             Column(
@@ -589,9 +715,105 @@ fun HomeScreen(
                         }
                     }
                     Spacer(modifier = Modifier.height(16.dp))
+                    // Add logout button
+                    Button(
+                        onClick = {
+                            coroutineScope.launch {
+                                viewModel.logout(context)
+                                navController.navigate("login") {
+                                    popUpTo("home") { inclusive = true }
+                                }
+                                Timber.d("HomeScreen: Logged out, navigating to LoginScreen")
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp)
+                    ) {
+                        Text("Log Out")
+                    }
                 }
             }
         }
+    }
+
+    // Username prompt dialog
+    if (showUsernamePrompt) {
+        AlertDialog(
+            onDismissRequest = { /* Enforce setting username */ },
+            title = { Text("Set Your Username") },
+            text = {
+                Column {
+                    Text("Please choose a unique username to use instead of your worker ID.")
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = usernameInput,
+                        onValueChange = {
+                            usernameInput = it.trim()
+                            usernameError = null
+                        },
+                        label = { Text("Username") },
+                        isError = usernameError != null,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Text,
+                            imeAction = ImeAction.Done
+                        ),
+                        keyboardActions = KeyboardActions(
+                            onDone = {
+                                if (usernameInput.isEmpty() || usernameInput.length < 4) {
+                                    usernameError = "Username must be at least 4 characters"
+                                    Timber.d("HomeScreen: Username prompt: Validation failed - Username too short: '$usernameInput'")
+                                } else {
+                                    coroutineScope.launch {
+                                        handleUsernameSubmission(
+                                            usernameInput = usernameInput,
+                                            viewModel = viewModel,
+                                            context = context,
+                                            keyboardController = keyboardController,
+                                            onSuccess = { showUsernameSuccess = true },
+                                            onError = { error -> usernameError = error }
+                                        )
+                                    }
+                                }
+                            }
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    usernameError?.let {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = it,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (usernameInput.isEmpty() || usernameInput.length < 4) {
+                            usernameError = "Username must be at least 4 characters"
+                            Timber.d("HomeScreen: Username prompt: Validation failed - Username too short: '$usernameInput'")
+                        } else {
+                            coroutineScope.launch {
+                                handleUsernameSubmission(
+                                    usernameInput = usernameInput,
+                                    viewModel = viewModel,
+                                    context = context,
+                                    keyboardController = keyboardController,
+                                    onSuccess = { showUsernameSuccess = true },
+                                    onError = { error -> usernameError = error }
+                                )
+                            }
+                        }
+                    }
+                ) {
+                    Text("Save")
+                }
+            }
+            // No dismissButton to enforce username setting
+        )
     }
 }
 
@@ -603,26 +825,19 @@ suspend fun performCheckInAndSaveLocation(
     onError: (String) -> Unit
 ) {
     try {
-        viewModel.checkIn(phone)
+        viewModel.checkIn(phone, context)
         if (ContextCompat.checkSelfPermission(
                 context,
                 Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
-        ) {
+            ) == PackageManager.PERMISSION_GRANTED) {
             val location: Location? = fusedLocationClient.lastLocation.await()
             if (location != null) {
-                val workerId = PrefsHelper.getWorkerId(context)
-                if (workerId != null) {
-                    viewModel.saveLocation(
-                        workerId = workerId,
-                        latitude = location.latitude,
-                        longitude = location.longitude,
-                        action = "Check-In"
-                    )
-                } else {
-                    onError("Worker ID not found")
-                    Timber.tag("HomeScreen").e("Worker ID not found")
-                }
+                viewModel.saveLocation(
+                    context,
+                    location.latitude,
+                    location.longitude,
+                    "Check-In"
+                )
             } else {
                 onError("Unable to get location")
                 Timber.tag("HomeScreen").e("Unable to get location")
@@ -648,22 +863,15 @@ suspend fun performLocationUpdate(
         if (ContextCompat.checkSelfPermission(
                 context,
                 Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
-        ) {
+            ) == PackageManager.PERMISSION_GRANTED) {
             val location: Location? = fusedLocationClient.lastLocation.await()
             if (location != null) {
-                val workerId = PrefsHelper.getWorkerId(context)
-                if (workerId != null) {
-                    viewModel.saveLocation(
-                        workerId = workerId,
-                        latitude = location.latitude,
-                        longitude = location.longitude,
-                        action = action
-                    )
-                } else {
-                    onError("Worker ID not found")
-                    Timber.tag("HomeScreen").e("Worker ID not found")
-                }
+                viewModel.saveLocation(
+                    context,
+                    location.latitude,
+                    location.longitude,
+                    action
+                )
             } else {
                 onError("Unable to get location")
                 Timber.tag("HomeScreen").e("Unable to get location")

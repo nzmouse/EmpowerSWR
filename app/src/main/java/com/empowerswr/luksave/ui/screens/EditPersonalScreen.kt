@@ -1,6 +1,8 @@
 package com.empowerswr.luksave.ui.screens
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -12,6 +14,7 @@ import com.empowerswr.luksave.EmpowerViewModel
 import kotlinx.coroutines.launch
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.ui.platform.LocalContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -22,7 +25,7 @@ fun EditPersonalScreen(viewModel: EmpowerViewModel, navController: NavHostContro
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
-
+    val context = LocalContext.current
     Scaffold(
         topBar = {
             TopAppBar(
@@ -43,9 +46,11 @@ fun EditPersonalScreen(viewModel: EmpowerViewModel, navController: NavHostContro
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(16.dp),
+                .padding(16.dp)
+                .verticalScroll(rememberScrollState())
+                .imePadding(),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Top  // Stack naturally
+            verticalArrangement = Arrangement.Top
         ) {
             Text("Preferred Name", style = MaterialTheme.typography.labelLarge)
             Spacer(modifier = Modifier.height(8.dp))
@@ -55,16 +60,16 @@ fun EditPersonalScreen(viewModel: EmpowerViewModel, navController: NavHostContro
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("Enter preferred name") }
             )
-            Spacer(modifier = Modifier.height(16.dp))  // Space between field and button
+            Spacer(modifier = Modifier.height(16.dp))
             Button(
                 onClick = {
-                    focusManager.clearFocus()  // Dismiss keyboard on submit
+                    focusManager.clearFocus()
                     if (preferredName.isNotBlank()) {
                         isSaving = true
-                        viewModel.updatePreferredName(preferredName) { success, error ->
+                        viewModel.updatePreferredName(preferredName, context) { isSuccess, error ->
                             isSaving = false
                             coroutineScope.launch {
-                                if (success) {
+                                if (isSuccess) {
                                     snackbarHostState.showSnackbar("Submitted for review")
                                     navController.previousBackStackEntry?.savedStateHandle?.set("refresh_profile", true)
                                     navController.popBackStack()
@@ -79,10 +84,19 @@ fun EditPersonalScreen(viewModel: EmpowerViewModel, navController: NavHostContro
                         }
                     }
                 },
-                enabled = !isSaving
-            ) {
-                if (isSaving) CircularProgressIndicator(modifier = Modifier.size(24.dp)) else Text("Save")
-            }
+                enabled = !isSaving,
+                content = {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (isSaving) {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                        }
+                        Text("Save")
+                    }
+                }
+            )
         }
     }
 }

@@ -110,4 +110,15 @@ interface EmpowerApi {
         @Query("workerId") workerId: String
     ): Response<Map<String, String?>>
 
+    @POST("updateContract.php/update_contract_status")
+    suspend fun signContract(
+        @Query("token") token: String,
+        @Query("workerId") workerId: String
+    ): SignContractResponse
+
+    @POST("api.php/updateUsername")
+    suspend fun updateUsername(
+        @Query("token") token: String,
+        @Body request: UpdateUsernameRequest
+    ): UpdateUsernameResponse
 }

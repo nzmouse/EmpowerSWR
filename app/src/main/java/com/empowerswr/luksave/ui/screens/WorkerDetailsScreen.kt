@@ -23,6 +23,7 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import kotlinx.coroutines.Dispatchers
 import timber.log.Timber
@@ -61,7 +62,7 @@ fun WorkerDetailsScreen(
     val notifications by viewModel.notifications
     val notificationFromIntent by viewModel.notificationFromIntent
     val pendingFields by viewModel.pendingFields
-
+    val localContext = LocalContext.current
     var isRefreshing by remember { mutableStateOf(false) }
     LaunchedEffect(token) {
         if (token == null) {
@@ -69,12 +70,12 @@ fun WorkerDetailsScreen(
                 popUpTo(navController.graph.startDestinationId) { inclusive = true }
             }
         } else if (workerDetails == null) {  // Fetch only if data is missing (initial or reset)
-            viewModel.fetchWorkerDetails { error ->
+            viewModel.fetchWorkerDetails(localContext) { error ->
                 if (error != null) {
                     coroutineScope.launch { snackbarHostState.showSnackbar("Failed to load worker details: ${error.message}") }
                 }
             }
-            viewModel.fetchHistory { error ->
+            viewModel.fetchHistory(localContext) { error ->
                 historyError = error.message ?: "Failed to load history"
             }
         }
@@ -87,7 +88,7 @@ fun WorkerDetailsScreen(
                 if (refresh) {
                     coroutineScope.launch {
                         delay(2000)  // Wait for backend commit
-                        viewModel.fetchWorkerDetails { error ->
+                        viewModel.fetchWorkerDetails(localContext) { error ->
                             workerError = error?.message ?: "Failed to load worker details"
                         }
                     }
@@ -105,7 +106,7 @@ fun WorkerDetailsScreen(
                 PrefsHelper.saveFcmToken(context, fcmToken)
                 val workerId = PrefsHelper.getWorkerId(context)
                 if (workerId != null) {
-                    viewModel.updateFcmToken(fcmToken, workerId)
+                    viewModel.updateFcmToken(fcmToken, localContext)
                 } else {
                     Timber.i("No workerId available for FCM token update")
                 }
@@ -179,7 +180,7 @@ fun WorkerDetailsScreen(
                 coroutineScope.launch {
                     try {
                         isRefreshing = true
-                        viewModel.fetchWorkerDetails { error ->
+                        viewModel.fetchWorkerDetails(localContext) { error ->
                             Timber.tag("WorkerDetailsScreen").e("Refresh error")
                             isRefreshing = false  // Ensure reset after callback
                         }

@@ -13,13 +13,13 @@ object PrefsHelper {
     private const val KEY_HAS_REGISTERED = "has_registered"
 
     fun saveWorkerId(context: Context, workerId: String) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit { putString(KEY_WORKER_ID, workerId) }
+        val prefs = context.getSharedPreferences("EmpowerSWRPrefs", Context.MODE_PRIVATE)
+        prefs.edit().putString("workerId", workerId).apply()
     }
 
     fun getWorkerId(context: Context): String? {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        return prefs.getString(KEY_WORKER_ID, null)
+        val prefs = context.getSharedPreferences("EmpowerSWRPrefs", Context.MODE_PRIVATE)
+        return prefs.getString("workerId", null)
     }
 
     fun saveFcmToken(context: Context, fcmToken: String) {
@@ -28,16 +28,15 @@ object PrefsHelper {
     }
 
     fun saveToken(context: Context, token: String, expiry: Long) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit {
-            putString(KEY_TOKEN, token)
-                .putLong(KEY_TOKEN_EXPIRY, expiry)
-        }
+        val prefs = context.getSharedPreferences("EmpowerSWRPrefs", Context.MODE_PRIVATE)
+        prefs.edit().putString("token", token).putLong("tokenExpiry", expiry).apply()
     }
 
     fun getToken(context: Context): String? {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        return prefs.getString(KEY_TOKEN, null)
+        val token = prefs.getString(KEY_TOKEN, null)
+        Timber.i("Retrieved JWT Token: $token")
+        return token
     }
 
     fun getTokenExpiry(context: Context): Long? {
@@ -60,12 +59,8 @@ object PrefsHelper {
     }
 
     fun clearToken(context: Context) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit {
-            remove(KEY_TOKEN)
-                .remove(KEY_TOKEN_EXPIRY)
-                .remove(KEY_WORKER_ID)
-        }
+        val prefs = context.getSharedPreferences("EmpowerSWRPrefs", Context.MODE_PRIVATE)
+        prefs.edit().remove("token").remove("tokenExpiry").apply()
     }
     fun getWorkerDetails(context: Context): Pair<String, String> {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -80,14 +75,18 @@ object PrefsHelper {
                 .putString("surname", surname ?: "Unknown")
         }
     }
-    fun getJwtToken(context: Context): String {
+    fun clearPrefs(context: Context) {
         val prefs = context.getSharedPreferences("EmpowerSWRPrefs", Context.MODE_PRIVATE)
-        val token = prefs.getString("token", "") ?: ""
-        Timber.i("Retrieved JWT Token")
-        return token
+        prefs.edit().clear().apply()
     }
 
-    fun clearPrefs(context: Context) {
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit { clear() }
+    fun saveUsername(context: Context, username: String?) {
+        val prefs = context.getSharedPreferences("EmpowerPrefs", Context.MODE_PRIVATE)
+        prefs.edit().putString("username", username).apply()
+    }
+
+    fun getUsername(context: Context): String? {
+        val prefs = context.getSharedPreferences("EmpowerPrefs", Context.MODE_PRIVATE)
+        return prefs.getString("username", null)
     }
 }

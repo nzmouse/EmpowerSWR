@@ -8,6 +8,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -400,7 +401,10 @@ fun FlightsScreen(
             }
         }
     }
-
+    // Log screen usage
+    LaunchedEffect(Unit) {
+        Timber.i("ScreenUsage: FlightsScreen displayed, workerId=${PrefsHelper.getWorkerId(context) ?: "unknown"}, timestamp=${System.currentTimeMillis()}")
+    }
     // Reusable function to handle location access with permission checks
     fun requestLocationAndPerformAction(
         workerId: String,
@@ -460,7 +464,7 @@ fun FlightsScreen(
                     if (isNetworkAvailable.value && token != null && isScreenActive.value) {
                         val workerId = PrefsHelper.getWorkerId(localContext)
                         if (workerId != null) {
-                            viewModel.fetchFlightDetails(workerId) { error ->
+                            viewModel.fetchFlightDetails(localContext) { error ->
                                 if (error != null) {
                                     Timber.tag("FlightsScreen").e(error, "Flight fetch error on resume")
                                     flightError = error.message ?: "Failed to load flight details"
@@ -474,7 +478,7 @@ fun FlightsScreen(
                                     flightError = null
                                 }
                             }
-                            viewModel.fetchPdbDetails(workerId) { error ->
+                            viewModel.fetchPdbDetails(localContext) { error ->
                                 if (error != null && error.message != "No pre-departure details available") {
                                     Timber.tag("FlightsScreen").e(error, "PDB fetch error on resume")
                                     pdbError = error.message ?: "Failed to load PDB details"
@@ -521,7 +525,7 @@ fun FlightsScreen(
         } else if (isNetworkAvailable.value && isScreenActive.value) {
             val workerId = PrefsHelper.getWorkerId(context)
             if (workerId != null) {
-                viewModel.fetchFlightDetails(workerId) { error ->
+                viewModel.fetchFlightDetails(localContext) { error ->
                     if (error != null) {
                         Timber.tag("FlightsScreen").e(error, "Flight fetch error")
                         flightError = error.message ?: "Failed to load flight details"
@@ -535,7 +539,7 @@ fun FlightsScreen(
                         flightError = null
                     }
                 }
-                viewModel.fetchPdbDetails(workerId) { error ->
+                viewModel.fetchPdbDetails(localContext) { error ->
                     if (error != null && error.message != "No pre-departure details available") {
                         Timber.tag("FlightsScreen").e(error, "PDB fetch error")
                         pdbError = error.message ?: "Failed to load PDB details"
@@ -577,7 +581,7 @@ fun FlightsScreen(
                         val workerId = PrefsHelper.getWorkerId(context)
                         if (workerId != null) {
                             var hasNetworkError = false
-                            viewModel.fetchFlightDetails(workerId) { error ->
+                            viewModel.fetchFlightDetails(localContext) { error ->
                                 if (error != null) {
                                     Timber.tag("FlightsScreen").e(error, "Flight refresh error")
                                     flightError = error.message ?: "Failed to refresh flight details"
@@ -586,7 +590,7 @@ fun FlightsScreen(
                                     flightError = null
                                 }
                             }
-                            viewModel.fetchPdbDetails(workerId) { error ->
+                            viewModel.fetchPdbDetails(localContext) { error ->
                                 if (error != null && error.message != "No pre-departure details available") {
                                     Timber.tag("FlightsScreen").e(error, "PDB refresh error")
                                     pdbError = error.message ?: "Failed to refresh PDB details"
@@ -642,7 +646,7 @@ fun FlightsScreen(
                             // Wrap flight details fetch in a timeout
                             withTimeoutOrNull(10000L) {
                                 var fetchCompleted = false
-                                viewModel.fetchFlightDetails(workerId) { error ->
+                                viewModel.fetchFlightDetails(localContext) { error ->
                                     fetchCompleted = true
                                     if (error != null) {
                                         Timber.tag("FlightsScreen").e(error, "Flight refresh error")
@@ -665,7 +669,7 @@ fun FlightsScreen(
                             // Wrap PDB details fetch in a timeout
                             withTimeoutOrNull(10000L) {
                                 var fetchCompleted = false
-                                viewModel.fetchPdbDetails(workerId) { error ->
+                                viewModel.fetchPdbDetails(localContext) { error ->
                                     fetchCompleted = true
                                     if (error != null && error.message != "No pre-departure details available") {
                                         Timber.tag("FlightsScreen").e(error, "PDB refresh error")
@@ -758,7 +762,8 @@ fun FlightsScreen(
                             colors = CardDefaults.cardColors(
                                 containerColor = MaterialTheme.colorScheme.surface,
                                 contentColor = MaterialTheme.colorScheme.onSurface
-                            )
+                            ),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), // Blue-gray outline
                         ) {
                             Column(
                                 modifier = Modifier
@@ -895,7 +900,7 @@ fun FlightsScreen(
                                                                 action = action,
                                                                 onSuccess = { lat, lng ->
                                                                     viewModel.saveLocation(
-                                                                        workerId,
+                                                                        localContext,
                                                                         lat,
                                                                         lng,
                                                                         action
@@ -941,7 +946,7 @@ fun FlightsScreen(
                                                             }
                                                             return@Button
                                                         }
-                                                        viewModel.updatePdbStatus(workerId) { success, message ->
+                                                        viewModel.updatePdbStatus(localContext) { success, message ->
                                                             coroutineScope.launch {
                                                                 if (success) {
                                                                     snackbarHostState.showSnackbar("Great! Your PDB is confirmed!")
@@ -1018,7 +1023,7 @@ fun FlightsScreen(
                                                             }
                                                             return@Button
                                                         }
-                                                        viewModel.updatePdbInternalStatus(workerId) { success, message ->
+                                                        viewModel.updatePdbInternalStatus(localContext) { success, message ->
                                                             Timber.i("Internal PDB status update result: success=%b, message=%s", success, message)
                                                             coroutineScope.launch {
                                                                 if (success) {
@@ -1082,7 +1087,7 @@ fun FlightsScreen(
                                         val workerId = PrefsHelper.getWorkerId(localContext)
                                         if (workerId != null && token != null && isNetworkAvailable.value && isScreenActive.value) {
 
-                                            viewModel.fetchPdbDetails(workerId) { error ->
+                                            viewModel.fetchPdbDetails(localContext) { error ->
                                                 if (error != null && error.message != "No pre-departure details available") {
 
                                                     if (System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
@@ -1165,7 +1170,7 @@ fun FlightsScreen(
                                         val workerId = PrefsHelper.getWorkerId(localContext)
                                         if (workerId != null && token != null && isNetworkAvailable.value && isScreenActive.value) {
 
-                                            viewModel.fetchPdbDetails(workerId) { error ->
+                                            viewModel.fetchPdbDetails(localContext) { error ->
                                                 if (error != null && error.message != "No pre-departure details available") {
 
                                                     if (System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
@@ -1219,7 +1224,8 @@ fun FlightsScreen(
                         colors = CardDefaults.cardColors(
                             containerColor = MaterialTheme.colorScheme.surface,
                             contentColor = MaterialTheme.colorScheme.onSurface
-                        )
+                        ),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), // Blue-gray outline
                     ) {
                         Column(
                             modifier = Modifier
@@ -1260,7 +1266,7 @@ fun FlightsScreen(
                                                 }
                                                 return@Button
                                             }
-                                            viewModel.updateFlightStatus(workerId) { success, message ->
+                                            viewModel.updateFlightStatus(localContext) { success, message ->
                                                 coroutineScope.launch {
                                                     if (success) {
                                                         snackbarHostState.showSnackbar("Flight confirmed! Ready to go!")
@@ -1316,7 +1322,8 @@ fun FlightsScreen(
                                     colors = CardDefaults.cardColors(
                                         containerColor = MaterialTheme.colorScheme.surfaceVariant,
                                         contentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                    ),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), // Blue-gray outline
                                 ) {
                                     Column(
                                         modifier = Modifier.padding(12.dp),
@@ -1438,7 +1445,7 @@ fun FlightsScreen(
                                                         action = "Checked In",
                                                         onSuccess = { lat, lng ->
                                                             viewModel.saveLocation(
-                                                                workerId,
+                                                                localContext,
                                                                 lat,
                                                                 lng,
                                                                 "Checked In"
@@ -1491,7 +1498,8 @@ fun FlightsScreen(
                                     colors = CardDefaults.cardColors(
                                         containerColor = MaterialTheme.colorScheme.surfaceVariant,
                                         contentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                    ),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), // Blue-gray outline
                                 ) {
                                     Column(
                                         modifier = Modifier.padding(12.dp),
@@ -1622,7 +1630,7 @@ fun FlightsScreen(
                                                         action = "Checked In",
                                                         onSuccess = { lat, lng ->
                                                             viewModel.saveLocation(
-                                                                workerId,
+                                                                localContext,
                                                                 lat,
                                                                 lng,
                                                                 "Checked In"
@@ -1670,7 +1678,8 @@ fun FlightsScreen(
                                     colors = CardDefaults.cardColors(
                                         containerColor = MaterialTheme.colorScheme.surfaceVariant,
                                         contentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                    ),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), // Blue-gray outline
                                 ) {
                                     Column(
                                         modifier = Modifier.padding(12.dp),
@@ -1801,7 +1810,7 @@ fun FlightsScreen(
                                                         action = "Checked In",
                                                         onSuccess = { lat, lng ->
                                                             viewModel.saveLocation(
-                                                                workerId,
+                                                                localContext,
                                                                 lat,
                                                                 lng,
                                                                 "Checked In"
@@ -1825,6 +1834,45 @@ fun FlightsScreen(
                                                 Text("Checked In")
                                             }
                                         }
+                                    }
+                                }
+                            }
+                            if (details.flightStatus == "Unaware" || details.flightStatus == "Messaged") {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Button(
+                                        onClick = {
+                                            val workerId = PrefsHelper.getWorkerId(localContext)
+                                            if (workerId == null) {
+                                                Timber.tag("FlightsScreen").e("No worker ID available for flight status update")
+                                                coroutineScope.launch {
+                                                    snackbarHostState.showSnackbar("No worker ID available.")
+                                                }
+                                                return@Button
+                                            }
+                                            viewModel.updateFlightStatus(localContext) { success, message ->
+                                                coroutineScope.launch {
+                                                    if (success) {
+                                                        snackbarHostState.showSnackbar("Flight confirmed! Ready to go!")
+                                                    } else {
+                                                        snackbarHostState.showSnackbar("Something went wrong. Try again")
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onPrimary
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Tankyu tumas!  Mi save nao.")
                                     }
                                 }
                             }
@@ -1858,7 +1906,7 @@ fun FlightsScreen(
                                                 action = "Travel Location",
                                                 onSuccess = { lat, lng ->
                                                     viewModel.saveLocation(
-                                                        workerId,
+                                                        localContext,
                                                         lat,
                                                         lng,
                                                         "Travel Location"
@@ -1925,7 +1973,7 @@ fun FlightsScreen(
                                     onClick = {
                                         val workerId = PrefsHelper.getWorkerId(localContext)
                                         if (workerId != null && token != null && isNetworkAvailable.value && isScreenActive.value) {
-                                            viewModel.fetchFlightDetails(workerId) { error ->
+                                            viewModel.fetchFlightDetails(localContext) { error ->
                                                 if (error != null) {
                                                     Timber.tag("FlightsScreen").e(error, "Retry flight fetch error")
                                                     if (System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
