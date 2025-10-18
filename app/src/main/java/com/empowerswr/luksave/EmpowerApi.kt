@@ -47,11 +47,18 @@ interface EmpowerApi {
         @Query("token") token: String
     ): FlightDetails
 
+    @GET("flights.php/inbound")
+    suspend fun getInboundFlightDetails(
+        @Query("workerId") workerId: String,
+        @Query("token") token: String
+    ): InboundFlightDetails?
+
     @GET("flights.php/pdb")
     suspend fun getPdbDetails(
         @Query("workerId") workerId: String,
         @Query("token") token: String
     ): PdbDetails
+
 
     @POST("flights.php/update_pdb_status")
     suspend fun updatePdbStatus(

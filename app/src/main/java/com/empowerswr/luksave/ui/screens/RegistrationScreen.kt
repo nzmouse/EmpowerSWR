@@ -28,7 +28,6 @@ import androidx.navigation.NavHostController
 import com.empowerswr.luksave.EmpowerViewModel
 import com.empowerswr.luksave.PrefsHelper
 import com.google.firebase.messaging.FirebaseMessaging
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import timber.log.Timber
 
@@ -56,16 +55,89 @@ fun RegistrationScreen(
 
     val token by viewModel.token
     val loginError by viewModel.loginError
-    val alerts by viewModel.alerts
-    val notifications by viewModel.notifications
-    val notificationFromIntent by viewModel.notificationFromIntent
 
-    // Validate PIN and Username reactively
-    val pinError by remember(pin, confirmPin) {
-        derivedStateOf { validatePin(pin, confirmPin) }
+    // Log screen open
+    LaunchedEffect(Unit) {
+        Timber.i("RegistrationScreen opened")
     }
-    val usernameError by remember(username) {
-        derivedStateOf { validateUsername(username) }
+
+    // Individual field errors (set on button click)
+    var passportError by remember { mutableStateOf<String?>(null) }
+    var surnameError by remember { mutableStateOf<String?>(null) }
+    var usernameError by remember { mutableStateOf<String?>(null) }
+    var pinError by remember { mutableStateOf<String?>(null) }
+
+    fun validateFields(): Boolean {
+        // Clear previous errors
+        passportError = null
+        surnameError = null
+        usernameError = null
+        pinError = null
+
+        var isValid = true
+
+        // Passport validation
+        val trimmedPassport = passport.trim().uppercase()
+        if (trimmedPassport.isEmpty()) {
+            passportError = "Passport number is required"
+            isValid = false
+        } else if (!trimmedPassport.matches(Regex("^[A-Z]{2}\\d{6,7}$"))) {
+            passportError = "Passport format: e.g., RV0123456"
+            isValid = false
+        }
+
+        // Surname validation
+        val trimmedSurname = surname.trim().uppercase()
+        if (trimmedSurname.isEmpty()) {
+            surnameError = "Surname is required (Exactly as on passport)"
+            isValid = false
+        }
+
+        // Username validation
+        if (username.isEmpty()) {
+            usernameError = "Username cannot be empty"
+            isValid = false
+        } else if (username.length < 3) {
+            usernameError = "Username must be at least 3 characters"
+            isValid = false
+        } else if (username.length > 20) {
+            usernameError = "Username cannot exceed 20 characters"
+            isValid = false
+        } else if (!username.matches(Regex("^[a-zA-Z0-9]+$"))) {
+            usernameError = "Username can only contain letters and numbers"
+            isValid = false
+        }
+
+        // PIN validation
+        if (pin.length != 4) {
+            pinError = "PIN must be 4 digits"
+            isValid = false
+        } else if (pin != confirmPin) {
+            pinError = "PINs do not match"
+            isValid = false
+        } else if (pin.all { it == pin[0] }) {
+            pinError = "PIN cannot be all the same digit"
+            isValid = false
+        }
+
+        return isValid
+    }
+
+    fun onRegisterClick() {
+        val valid = validateFields()
+        if (valid) {
+            keyboardController?.hide()
+            coroutineScope.launch {
+                Timber.i("Registration attempt: passport=$passport, username=$username")
+                viewModel.register(
+                    passport.trim().uppercase(),
+                    surname.trim().uppercase(),
+                    username.trim(),
+                    pin,
+                    localContext
+                )
+            }
+        }
     }
 
     // Show Worker ID dialog after registration
@@ -121,6 +193,7 @@ fun RegistrationScreen(
                     Spacer(modifier = Modifier.height(16.dp))
                     Button(
                         onClick = {
+                            Timber.i("Registration success: Worker ID dialog dismissed")
                             showWorkerIdDialog = false
                             dialogDismissed = true
                             navController.navigate("login") {
@@ -141,7 +214,6 @@ fun RegistrationScreen(
         if (token != null && !registrationComplete && !showWorkerIdDialog) {
             val existingToken = PrefsHelper.getToken(localContext)
             if (existingToken != null && existingToken != token) {
-                Timber.i("Clearing existing token")
                 PrefsHelper.clearToken(localContext)
             }
             FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
@@ -152,27 +224,23 @@ fun RegistrationScreen(
                     }
                 } else {
                     fcmError = "Failed to get FCM token: ${task.exception?.message}"
-                    Timber.e("FCM token fetch error: ${task.exception?.message}")
                 }
             }
             viewModel.fetchWorkerDetails(localContext)
             viewModel.fetchAlerts(localContext)
             PrefsHelper.setRegistered(localContext, true)
             registrationComplete = true
+            Timber.i("Registration success: Token received")
             showWorkerIdDialog = true
         }
     }
 
-    // Prevent premature navigation
-    LaunchedEffect(dialogDismissed) {
-        if (dialogDismissed) {
-            // Navigation is handled in the dialog's OK button
-        } else if (token != null && registrationComplete && !showWorkerIdDialog) {
-            // Additional logic if needed
+    // Log registration failure
+    LaunchedEffect(loginError) {
+        loginError?.let { error ->
+            Timber.e("Registration failed: $error")
         }
     }
-
-    // Other LaunchedEffect blocks for alerts, notifications, etc. (unchanged from original)
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) }
@@ -199,10 +267,13 @@ fun RegistrationScreen(
                 color = MaterialTheme.colorScheme.onBackground
             )
             Spacer(modifier = Modifier.height(16.dp))
+
+            // Passport Field
             OutlinedTextField(
                 value = passport,
-                onValueChange = { newValue -> passport = newValue.trim().uppercase() },
+                onValueChange = { passport = it.trim().uppercase() },
                 label = { Text("Passport Number (e.g., RV0127280)") },
+                isError = passportError != null,
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(
@@ -210,11 +281,23 @@ fun RegistrationScreen(
                     imeAction = ImeAction.Next
                 )
             )
+            passportError?.let {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = it,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold), // ✅ BOLD
+                    modifier = Modifier.padding(start = 16.dp)
+                )
+            }
             Spacer(modifier = Modifier.height(8.dp))
+
+            // Surname Field
             OutlinedTextField(
                 value = surname,
-                onValueChange = { newValue -> surname = newValue.trim().uppercase() },
-                label = { Text("Surname") },
+                onValueChange = { surname = it.trim().uppercase() },
+                label = { Text("Surname in Passport") },
+                isError = surnameError != null,
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(
@@ -222,50 +305,47 @@ fun RegistrationScreen(
                     imeAction = ImeAction.Next
                 )
             )
+            surnameError?.let {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = it,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold), // ✅ BOLD
+                    modifier = Modifier.padding(start = 16.dp)
+                )
+            }
             Spacer(modifier = Modifier.height(8.dp))
+
+            // Username Field
             OutlinedTextField(
                 value = username,
-                onValueChange = { newValue -> username = newValue.trim() },
+                onValueChange = { username = it.trim() },
                 label = { Text("Username / Nickname") },
+                isError = usernameError != null,
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Text,
                     imeAction = ImeAction.Next
-                ),
-                isError = usernameError != null
-            )
-            usernameError?.let { error ->
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = error,
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodyLarge.copy(
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp
-                    ),
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth()
                 )
-            }
-            loginError?.let { error ->
+            )
+            usernameError?.let {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = error,
+                    text = it,
                     color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodyLarge.copy(
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp
-                    ),
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth()
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold), // ✅ BOLD
+                    modifier = Modifier.padding(start = 16.dp)
                 )
             }
             Spacer(modifier = Modifier.height(8.dp))
+
+            // PIN Field
             OutlinedTextField(
                 value = pin,
-                onValueChange = { newValue -> pin = newValue.take(4) },
+                onValueChange = { pin = it.take(4) },
                 label = { Text("Choose a 4-Digit PIN") },
+                isError = pinError != null,
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
@@ -275,10 +355,13 @@ fun RegistrationScreen(
                 )
             )
             Spacer(modifier = Modifier.height(8.dp))
+
+            // Confirm PIN Field
             OutlinedTextField(
                 value = confirmPin,
-                onValueChange = { newValue -> confirmPin = newValue.take(4) },
+                onValueChange = { confirmPin = it.take(4) },
                 label = { Text("Re-enter PIN") },
+                isError = pinError != null,
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
@@ -289,31 +372,25 @@ fun RegistrationScreen(
                 keyboardActions = KeyboardActions(
                     onDone = {
                         keyboardController?.hide()
-                        if (pinError == null && usernameError == null && pin.isNotEmpty() && username.isNotEmpty()) {
-                            coroutineScope.launch {
-                                viewModel.register(passport, surname, username, pin, localContext)
-                            }
-                        }
+                        onRegisterClick()
                     }
                 )
             )
-            pinError?.let { error ->
+            pinError?.let {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    error,
+                    text = it,
                     color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodyLarge.copy(
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp
-                    ),
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth()
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold), // ✅ BOLD
+                    modifier = Modifier.padding(start = 16.dp)
                 )
             }
-            fcmError?.let { error ->
+
+            // Server Errors
+            loginError?.let {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    "FCM Error: $error",
+                    text = it,
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodyLarge.copy(
                         fontWeight = FontWeight.Bold,
@@ -323,21 +400,29 @@ fun RegistrationScreen(
                     modifier = Modifier.fillMaxWidth()
                 )
             }
+            fcmError?.let {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = it,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    ),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
             Spacer(modifier = Modifier.height(16.dp))
+
             Button(
-                onClick = {
-                    keyboardController?.hide()
-                    if (pinError == null && usernameError == null && pin.isNotEmpty() && username.isNotEmpty()) {
-                        coroutineScope.launch {
-                            viewModel.register(passport, surname, username, pin, localContext)
-                        }
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = pinError == null && usernameError == null && pin.isNotEmpty() && username.isNotEmpty()
+                onClick = { onRegisterClick() },
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Register")
             }
+
             Spacer(modifier = Modifier.height(16.dp))
             Text(
                 text = "Already registered? Log in with Worker ID",
@@ -358,26 +443,5 @@ fun RegistrationScreen(
                 }
             )
         }
-    }
-}
-
-// PIN Validation
-private fun validatePin(pin: String, confirmPin: String): String? {
-    return when {
-        pin.length != 4 -> "PIN must be 4 digits"
-        pin != confirmPin -> "PINs do not match"
-        pin.all { it == pin[0] } -> "PIN cannot be all the same digit"
-        else -> null
-    }
-}
-
-// Username Validation
-private fun validateUsername(username: String): String? {
-    return when {
-        username.isEmpty() -> "Username cannot be empty"
-        username.length < 3 -> "Username must be at least 3 characters"
-        username.length > 20 -> "Username cannot exceed 20 characters"
-        !username.matches(Regex("^[a-zA-Z0-9]+$")) -> "Username can only contain letters and numbers"
-        else -> null
     }
 }

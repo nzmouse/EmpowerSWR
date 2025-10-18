@@ -68,7 +68,6 @@
 -dontwarn com.google.protobuf.Parser
 -dontwarn com.google.protobuf.nano.CodedOutputByteBufferNano
 -dontwarn com.google.protobuf.nano.MessageNano
--dontwarn com.itextpdf.bouncycastle.BouncyCastleFactory
 -dontwarn com.jcraft.jzlib.Deflater
 -dontwarn com.jcraft.jzlib.Inflater
 -dontwarn com.jcraft.jzlib.JZlib$WrapperType
@@ -206,3 +205,9 @@
 -dontwarn sun.security.x509.X500Name
 -dontwarn sun.security.x509.X509CertImpl
 -dontwarn sun.security.x509.X509CertInfo
+# iText Ghost Kill (Temporary)
+-dontwarn com.itextpdf.bouncycastle.**
+-dontwarn com.itextpdf.bouncycastlefips.**
+-dontwarn java.awt.**
+-dontwarn javax.imageio.**
+-dontwarn sharpen.config.**

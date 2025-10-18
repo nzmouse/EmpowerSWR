@@ -1,7 +1,9 @@
 [versions]
 agp = "8.11.1"
 coil-compose = "2.7.0"
+html2pdf = "6.2.1"
 jackson-core = "2.19.2"
+json = "20250517"
 kotlin = "2.2.10"
 core-ktx = "1.17.0"
 activity-compose = "1.10.1"
@@ -20,10 +22,7 @@ media3-exoplayer = "1.8.0"
 java-jwt = "4.5.0"
 mlkit-document-scanner = "16.0.0-beta1"
 play-services-location = "21.3.0"
-pdf-viewer = "3.2.0-beta.1"
 signature-pad = "1.3.1"
-itext7-core = "9.2.0"
-appcompat = "1.7.1"
 timber = "5.0.1"
 firebaseCrashlyticsPlugin = "3.0.6" # Correct plugin version
 firebaseCrashlyticsLib = "20.0.1" # Library version
@@ -53,7 +52,9 @@ androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecyc
 
 # Coroutines
 coil-compose = { module = "io.coil-kt:coil-compose", version.ref = "coil-compose" }
+html2pdf = { module = "com.itextpdf:html2pdf", version.ref = "html2pdf" }
 jackson-core = { module = "com.fasterxml.jackson.core:jackson-core", version.ref = "jackson-core" }
+json = { module = "org.json:json", version.ref = "json" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 
 # Material
@@ -90,10 +91,8 @@ play-services-location = { group = "com.google.android.gms", name = "play-servic
 
 #Signing libraries
 
-pdf-viewer = { group = "com.github.barteksc", name = "android-pdf-viewer", version.ref = "pdf-viewer" }
 s3 = { module = "software.amazon.awssdk:s3", version.ref = "s3" }
 signature-pad = { group = "com.github.gcacace", name = "signature-pad", version.ref = "signature-pad" }
-itext7-core = { group = "com.itextpdf.android", name = "itext7-core-android", version.ref = "itext7-core" } # Updated name
 
 #Compatibility
 timber = { module = "com.jakewharton.timber:timber", version.ref = "timber" }

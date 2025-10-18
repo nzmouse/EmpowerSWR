@@ -21,8 +21,8 @@ android {
         applicationId = "com.empowerswr.luksave"
         minSdk = 26
         targetSdk = 36
-        versionCode = 5
-        versionName = "1.1.0"
+        versionCode = 7
+        versionName = "0.9.0-RC2"
     }
     signingConfigs {
         create("release") {
@@ -47,13 +47,21 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-
+    configurations {
+        all {
+            exclude(mapOf("group" to "com.github.barteksc"))
+            resolutionStrategy {
+                cacheDynamicVersionsFor(0, "seconds")
+                cacheChangingModulesFor(0, "seconds")
+            }
+        }
+    }
     buildFeatures {
         compose = true
     }
 
 
-    ndkVersion = "29.0.13599879-rc2"
+    ndkVersion = "29.0.14206865-rc2"
 
     packaging {
         resources {
@@ -65,7 +73,11 @@ android {
                 "META-INF/LGPL2.1",
                 "META-INF/FastDoubleParser-LICENSE",
                 "META-INF/io.netty.versions.properties",
-                "META-INF/INDEX.LIST"
+                "META-INF/INDEX.LIST",
+                "**/libjniPdfium.so",
+                "**/libmodft2.so",
+                "**/libmodpdfium.so",
+                "**/libmodpng.so"
             ))
         }
     }
@@ -97,9 +109,7 @@ dependencies {
     implementation(libs.retrofit.converter.scalars)
     implementation(libs.mlkit.document.scanner)
     implementation(libs.play.services.location)
-    implementation(libs.pdf.viewer)
     implementation(libs.signature.pad)
-    implementation(libs.itext7.core)
     debugImplementation(libs.androidx.compose.ui.tooling)
     implementation(libs.coil.compose)
     implementation(libs.s3) {
@@ -108,4 +118,6 @@ dependencies {
     implementation(libs.jackson.core)
     implementation(libs.timber)
     implementation(libs.firebase.crashlytics)
+    implementation(libs.json)
+    implementation(libs.html2pdf)
 }

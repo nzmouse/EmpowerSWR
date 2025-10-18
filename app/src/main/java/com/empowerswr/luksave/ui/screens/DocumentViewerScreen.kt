@@ -2,31 +2,26 @@ package com.empowerswr.luksave.ui.screens
 
 import android.app.DownloadManager
 import android.content.Context
+import android.content.Intent
 import android.os.Environment
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.FileProvider
 import androidx.core.net.toUri
 import androidx.navigation.NavController
 import com.empowerswr.luksave.MainActivity
 import com.empowerswr.luksave.PrefsHelper
 import com.empowerswr.luksave.findActivity
 import com.empowerswr.luksave.network.ListFilesService
-import com.github.barteksc.pdfviewer.PDFView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
@@ -34,6 +29,7 @@ import kotlinx.coroutines.delay
 import timber.log.Timber
 import java.io.File
 import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.net.URLDecoder
 import java.net.URLEncoder
 
@@ -51,8 +47,6 @@ fun DocumentViewerScreen(
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     var pdfFile by remember { mutableStateOf<File?>(null) }
-    var currentPage by remember { mutableStateOf(1) }
-    var totalPages by remember { mutableStateOf(1) }
     var hasNavigated by rememberSaveable { mutableStateOf(false) }
     var targetFilename by remember { mutableStateOf<String?>(null) }
     var retryTrigger by remember { mutableStateOf(0) }
@@ -83,70 +77,145 @@ fun DocumentViewerScreen(
     )
     val docTypeCode = documentTypes.find { decodedFilename.endsWith("- ${it.second}.pdf") }?.second
         ?: documentTypes.find { decodedFilename == "${it.first}.pdf" }?.second
-    val nicknameBase = docTypeCode?.let { documentTypes.find { it.second == docTypeCode }?.first } ?: decodedFilename.substringBeforeLast(".")
+    val nicknameBase = docTypeCode?.let { documentTypes.find { it.second == docTypeCode }?.first } ?: decodedFilename.substringBeforeLast(".pdf")
     val possibleNicknames = (0..10).flatMap { i ->
         val base = if (i == 0) "$nicknameBase" else "$nicknameBase-$i"
         listOf("$base.pdf", "$base.jpg", "$base.png")
     }
+
     // Log screen usage
     LaunchedEffect(Unit) {
         Timber.i("ScreenUsage: DocumentViewerScreen displayed, workerId=${PrefsHelper.getWorkerId(context) ?: "unknown"}, timestamp=${System.currentTimeMillis()}")
     }
-    // Collect download completion events from MainActivity
-    LaunchedEffect(decodedFilename) {
-        downloadCompleteFlow.collect { (downloadId, filename) ->
-            Timber.d("DocumentViewerScreen: Received download complete for ID: $downloadId, filename: $filename")
-            if (filename == decodedFilename + ".tmp" || filename == encodedFilename + ".tmp" || possibleNicknames.contains(filename + ".tmp")) {
-                val tempFile = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), filename.replace("+", " ").replace("%20", " ").trim())
-                Timber.d("DocumentViewerScreen: Checking temp file: ${tempFile.absolutePath}, exists: ${tempFile.exists()}, size: ${tempFile.length()}")
-                if (tempFile.exists() && tempFile.length() > 0 && tempFile.extension.lowercase() == "tmp" && isValidPdf(tempFile)) {
-                    val finalFile = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), decodedFilename)
-                    if (finalFile.exists()) {
-                        Timber.d("DocumentViewerScreen: Deleting old file: ${finalFile.absolutePath}")
-                        finalFile.delete()
+
+    // Launch PDF viewer after download
+    LaunchedEffect(pdfFile) {
+        pdfFile?.let { file ->
+            scope.launch(Dispatchers.Main) {
+                try {
+                    val uri = FileProvider.getUriForFile(
+                        context,
+                        "${context.packageName}.fileprovider",
+                        file
+                    )
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(uri, "application/pdf")
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
-                    Timber.d("DocumentViewerScreen: Renaming temp file to final: ${tempFile.absolutePath} to ${finalFile.absolutePath}")
-                    tempFile.renameTo(finalFile)
-                    pdfFile = finalFile
-                    Timber.i("DocumentViewerScreen: Set pdfFile to ${finalFile.absolutePath}")
-                } else {
-                    snackbarHostState.showSnackbar("Downloaded file not found or invalid")
-                    Timber.e("DocumentViewerScreen: Temp file invalid: exists=${tempFile.exists()}, size=${tempFile.length()}, extension=${tempFile.extension}, validPdf=${isValidPdf(tempFile)}")
-                    if (tempFile.exists()) {
-                        tempFile.delete()
+                    context.startActivity(Intent.createChooser(intent, "Open PDF"))
+                    Timber.d("DocumentViewerScreen: Launched PDF viewer with URI: $uri")
+                } catch (e: Exception) {
+                    Timber.e(e, "DocumentViewerScreen: No PDF viewer found")
+                    scope.launch {
+                        snackbarHostState.showSnackbar("No PDF viewer app found. Install Google PDF Viewer.")
                     }
                 }
             }
         }
     }
 
-    // Fallback file check (for temp file)
+    // Collect download completion events and resolve content URI
+    LaunchedEffect(decodedFilename) {
+        downloadCompleteFlow.collect { (downloadId, filename) ->
+            Timber.d("DocumentViewerScreen: Received download complete for ID: $downloadId, filename: $filename")
+            if (filename.contains(decodedFilename) && filename.endsWith(".tmp")) {
+                val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+                if (downloadManager == null) {
+                    Timber.e("DocumentViewerScreen: DownloadManager unavailable")
+                    scope.launch(Dispatchers.Main) {
+                        snackbarHostState.showSnackbar("Download service unavailable")
+                    }
+                    return@collect
+                }
+                val query = DownloadManager.Query().setFilterById(downloadId)
+                downloadManager.query(query).use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                        if (status == DownloadManager.STATUS_SUCCESSFUL) {
+                            val uri = cursor.getString(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI))
+                            val tempFile = File(context.cacheDir, decodedFilename)
+                            context.contentResolver.openInputStream(uri.toUri())?.use { input ->
+                                FileOutputStream(tempFile).use { output ->
+                                    input.copyTo(output)
+                                }
+                            }
+                            if (tempFile.exists() && tempFile.length() > 0 && isValidPdf(tempFile)) {
+                                pdfFile = tempFile
+                                // Clean up .tmp files in Downloads
+                                scope.launch(Dispatchers.IO) {
+                                    val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                                    downloadsDir.listFiles()?.forEach { file ->
+                                        Timber.d("DocumentViewerScreen: File in Downloads: ${file.absolutePath}")
+                                        if (file.name.contains(decodedFilename) && file.name.endsWith(".tmp")) {
+                                            Timber.d("DocumentViewerScreen: Attempting to delete temp file: ${file.absolutePath}")
+                                            var deleteAttempts = 0
+                                            val maxDeleteAttempts = 3
+                                            while (file.exists() && deleteAttempts < maxDeleteAttempts) {
+                                                if (file.delete()) {
+                                                    Timber.d("DocumentViewerScreen: Deleted temp file: ${file.absolutePath}")
+                                                    break
+                                                }
+                                                delay(500)
+                                                deleteAttempts++
+                                            }
+                                            if (file.exists()) {
+                                                Timber.e("DocumentViewerScreen: Failed to delete temp file: ${file.absolutePath} after $maxDeleteAttempts attempts")
+                                            }
+                                        }
+                                    }
+                                }
+                                Timber.i("DocumentViewerScreen: Set pdfFile to ${tempFile.absolutePath}")
+                            } else {
+                                scope.launch(Dispatchers.Main) {
+                                    snackbarHostState.showSnackbar("Downloaded file invalid")
+                                }
+                                Timber.e("DocumentViewerScreen: Temp file invalid: exists=${tempFile.exists()}, size=${tempFile.length()}")
+                                if (tempFile.exists()) tempFile.delete()
+                            }
+                        } else {
+                            scope.launch(Dispatchers.Main) {
+                                snackbarHostState.showSnackbar("Download failed")
+                            }
+                            Timber.e("DocumentViewerScreen: Download failed for ID: $downloadId, status: $status")
+                        }
+                    }
+                }
+            } else {
+                Timber.d("DocumentViewerScreen: Filename $filename does not match expected temp file for $decodedFilename")
+            }
+        }
+    }
+
+    // FIXED FALLBACK: Check DOWNLOADS FOLDER FIRST!
     LaunchedEffect(decodedFilename, retryTrigger) {
         if (pdfFile == null) {
             scope.launch(Dispatchers.IO) {
                 var attempts = 0
-                val maxAttempts = 90 // 90 seconds
+                val maxAttempts = 90
                 while (attempts < maxAttempts && pdfFile == null) {
-                    val tempFile = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), decodedFilename + ".tmp")
-                    Timber.d("DocumentViewerScreen: Fallback checking temp file: ${tempFile.absolutePath}, attempt: $attempts, exists: ${tempFile.exists()}, size: ${tempFile.length()}, validPdf: ${isValidPdf(tempFile)}")
-                    if (tempFile.exists() && tempFile.length() > 0 && tempFile.extension.lowercase() == "tmp" && isValidPdf(tempFile)) {
-                        val finalFile = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), decodedFilename)
-                        if (finalFile.exists()) {
-                            Timber.d("DocumentViewerScreen: Deleting old file: ${finalFile.absolutePath}")
-                            finalFile.delete()
-                        }
-                        Timber.i("DocumentViewerScreen: Renaming temp file to final: ${tempFile.absolutePath} to ${finalFile.absolutePath}")
-                        tempFile.renameTo(finalFile)
-                        scope.launch(Dispatchers.Main) {
-                            pdfFile = finalFile
-                        }
+                    // CHECK DOWNLOADS FOLDER FIRST (NEW!)
+                    val downloadsFile = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), decodedFilename)
+                    if (downloadsFile.exists() && downloadsFile.length() > 0 && isValidPdf(downloadsFile)) {
+                        pdfFile = downloadsFile
+                        Timber.i("DocumentViewerScreen: Found PDF in DOWNLOADS: ${downloadsFile.absolutePath}")
                         break
                     }
+
+                    // THEN CHECK CACHE (existing)
+                    val cacheFile = File(context.cacheDir, decodedFilename)
+                    if (cacheFile.exists() && cacheFile.length() > 0 && isValidPdf(cacheFile)) {
+                        pdfFile = cacheFile
+                        Timber.i("DocumentViewerScreen: Found PDF in CACHE: ${cacheFile.absolutePath}")
+                        break
+                    }
+
+                    Timber.d("DocumentViewerScreen: Checking for ${decodedFilename}, attempt: $attempts")
                     delay(1000)
                     attempts++
                 }
                 if (attempts >= maxAttempts) {
-                    Timber.e("DocumentViewerScreen: Fallback file check timed out for: $decodedFilename")
+                    Timber.e("DocumentViewerScreen: File check timed out for: $decodedFilename")
                     scope.launch(Dispatchers.Main) {
                         snackbarHostState.showSnackbar("File not found after timeout")
                     }
@@ -177,9 +246,9 @@ fun DocumentViewerScreen(
 
         scope.launch(Dispatchers.IO) {
             try {
-                // Compute target filename (use R2 filename directly)
+                // Compute target filename
                 val computedTargetFilename = decodedFilename
-                val tempFilename = "$computedTargetFilename.tmp" // Temp for download
+                val tempFilename = "$computedTargetFilename.tmp"
                 targetFilename = computedTargetFilename
 
                 // Fetch fresh URL
@@ -196,7 +265,7 @@ fun DocumentViewerScreen(
                 val downloadUrl = fileItem?.url ?: url
                 Timber.d("DocumentViewerScreen: Using download URL: $downloadUrl")
 
-                // Start download to temp file
+                // Start download
                 val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
                 if (downloadManager == null) {
                     Timber.e("DocumentViewerScreen: DownloadManager unavailable")
@@ -245,40 +314,7 @@ fun DocumentViewerScreen(
                 actions = {
                     IconButton(
                         onClick = {
-                            scope.launch(Dispatchers.IO) {
-                                try {
-                                    pdfFile?.let { file ->
-                                        val destFile = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), targetFilename ?: decodedFilename)
-                                        if (!destFile.exists()) {
-                                            FileInputStream(file).use { input ->
-                                                destFile.outputStream().use { output ->
-                                                    input.copyTo(output)
-                                                }
-                                            }
-                                        }
-                                        scope.launch(Dispatchers.Main) {
-                                            snackbarHostState.showSnackbar("PDF available in Downloads folder")
-                                        }
-                                    } ?: throw IllegalStateException("No PDF file available")
-                                } catch (e: Exception) {
-                                    Timber.e(e, "DocumentViewerScreen: Error copying PDF to Downloads")
-                                    scope.launch(Dispatchers.Main) {
-                                        snackbarHostState.showSnackbar("Error copying PDF: ${e.message}")
-                                    }
-                                }
-                            }
-                        },
-                        enabled = pdfFile != null
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Download,
-                            contentDescription = "Download",
-                            tint = if (pdfFile != null) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                        )
-                    }
-                    IconButton(
-                        onClick = {
-                            retryTrigger++ // Trigger fallback check
+                            retryTrigger++
                             Timber.d("DocumentViewerScreen: Manual retry triggered")
                         },
                         enabled = pdfFile == null
@@ -299,106 +335,22 @@ fun DocumentViewerScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(horizontal = 2.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
                 text = targetFilename ?: decodedFilename,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onBackground
             )
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.White)
-            ) {
-                pdfFile?.let { file ->
-                    Timber.d("DocumentViewerScreen: Rendering PDFView for ${file.absolutePath}")
-                    if (!file.exists()) {
-                        Timber.e("DocumentViewerScreen: PDF file does not exist: ${file.absolutePath}")
-                        Text("Error: PDF file not found")
-                        return@let
-                    }
-                    if (file.length() == 0L) {
-                        Timber.e("DocumentViewerScreen: PDF file is empty: ${file.absolutePath}")
-                        Text("Error: PDF file is empty")
-                        return@let
-                    }
-                    AndroidView(
-                        factory = { ctx ->
-                            PDFView(ctx, null).apply {
-                                try {
-                                    fromFile(file)
-                                        .defaultPage(currentPage - 1)
-                                        .onPageChange { page, pageCount ->
-                                            scope.launch {
-                                                Timber.d("DocumentViewerScreen: PDFView page changed to ${page + 1} of $pageCount")
-                                                currentPage = page + 1
-                                                totalPages = pageCount
-                                            }
-                                        }
-                                        .onError { error ->
-                                            Timber.e(error, "DocumentViewerScreen: PDFView failed to load ${file.absolutePath}")
-                                            scope.launch(Dispatchers.Main) {
-                                                snackbarHostState.showSnackbar("Failed to load PDF: ${error.message}")
-                                            }
-                                        }
-                                        .onLoad {
-                                            Timber.i("DocumentViewerScreen: PDFView loaded successfully for ${file.absolutePath}")
-                                        }
-                                        .load()
-                                } catch (e: Exception) {
-                                    Timber.e(e, "DocumentViewerScreen: PDFView initialization failed for ${file.absolutePath}")
-                                    scope.launch(Dispatchers.Main) {
-                                        snackbarHostState.showSnackbar("Failed to initialize PDF: ${e.message}")
-                                    }
-                                }
-                            }
-                        },
-                        modifier = Modifier.fillMaxSize(),
-                        update = { pdfView ->
-                            if (pdfView.currentPage != currentPage - 1) {
-                                Timber.d("DocumentViewerScreen: Updating PDFView to page ${currentPage - 1}")
-                                pdfView.jumpTo(currentPage - 1, true)
-                            }
-                        }
-                    )
-                } ?: Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Timber.d("DocumentViewerScreen: Showing loading text")
-                    Text("Loading PDF...")
-                }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(
-                    onClick = {
-                        if (currentPage > 1) {
-                            Timber.d("DocumentViewerScreen: Navigating to previous page: ${currentPage - 1}")
-                            currentPage--
-                        }
-                    },
-                    enabled = currentPage > 1
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Previous Page")
-                }
-                Text("Page $currentPage of $totalPages")
-                IconButton(
-                    onClick = {
-                        if (currentPage < totalPages) {
-                            Timber.d("DocumentViewerScreen: Navigating to next page: ${currentPage + 1}")
-                            currentPage++
-                        }
-                    },
-                    enabled = currentPage < totalPages
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Next Page")
-                }
+            Spacer(modifier = Modifier.height(16.dp))
+            if (pdfFile == null) {
+                CircularProgressIndicator()
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("Loading PDF...")
+            } else {
+                Text("PDF opened in external viewer")
             }
         }
     }

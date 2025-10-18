@@ -7,12 +7,15 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
+import androidx.compose.animation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -27,12 +30,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 import androidx.navigation.NavHostController
 import com.empowerswr.luksave.EmpowerViewModel
 import com.empowerswr.luksave.PrefsHelper
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import timber.log.Timber
 import com.google.firebase.messaging.FirebaseMessaging
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -43,6 +46,9 @@ fun LoginScreen(
     navController: NavHostController,
     onLoginSuccess: () -> Unit
 ) {
+    // =================================================================
+    // STATE VARIABLES
+    // =================================================================
     val coroutineScope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
     var workerIdOrUsername by rememberSaveable { mutableStateOf("") }
@@ -52,13 +58,41 @@ fun LoginScreen(
     val keyboardController = LocalSoftwareKeyboardController.current
     val loginErrorState by viewModel.loginError
     var showSettingsPrompt by remember { mutableStateOf(false) }
-    var hasInteracted by remember { mutableStateOf(false) }
+
+    // New User Detection State
+    var isNewUser by remember { mutableStateOf(false) }
+    var showHint by remember { mutableStateOf(false) }
+    var hintStep by remember { mutableStateOf(0) }
+    var showAnimatedHint by remember { mutableStateOf(false) }
+    var permissionsHandled by remember { mutableStateOf(false) }
 
     context.findEmpowerActivity() ?: run {
         throw IllegalStateException("LoginScreen must be called within a ComponentActivity")
     }
 
-    // Permission launcher
+    // =================================================================
+    // NEW USER DETECTION
+    // =================================================================
+    fun detectNewUser(context: Context): Boolean {
+        val prefs = context.getSharedPreferences("empower_prefs", Context.MODE_PRIVATE)
+        return when {
+            !prefs.getBoolean("has_logged_in", false) &&
+                    prefs.getString("last_username", null).isNullOrEmpty() &&
+                    prefs.getBoolean("has_registered", false) == false -> {
+                if (prefs.getLong("install_timestamp", 0L) == 0L) {
+                    prefs.edit {
+                        putLong("install_timestamp", System.currentTimeMillis())
+                    }
+                }
+                true
+            }
+            else -> false
+        }
+    }
+
+    // =================================================================
+    // PERMISSION LAUNCHERS
+    // =================================================================
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
@@ -68,9 +102,9 @@ fun LoginScreen(
             showSettingsPrompt = true
             loginError = "Location permission denied. Please enable it in app settings."
         }
+        permissionsHandled = true
     }
 
-    // Settings launcher
     val settingsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) {
@@ -78,91 +112,115 @@ fun LoginScreen(
             != PackageManager.PERMISSION_GRANTED) {
             showSettingsPrompt = true
             loginError = "Location permission still denied. Please enable it in settings."
-            Timber.tag("LoginScreen").e("Location permission still denied after settings")
         }
+        permissionsHandled = true
     }
-    // Log screen usage
+
     LaunchedEffect(Unit) {
-        Timber.i("ScreenUsage: LoginScreen displayed, workerId=${PrefsHelper.getWorkerId(context) ?: "unknown"}, timestamp=${System.currentTimeMillis()}")
-    }
-    // Check permissions on start
-    LaunchedEffect(Unit) {
-        delay(500)
-        if (ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.ACCESS_FINE_LOCATION
-            ) != PackageManager.PERMISSION_GRANTED) {
+        delay(200)
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
+            != PackageManager.PERMISSION_GRANTED) {
             permissionLauncher.launch(arrayOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,
                 Manifest.permission.ACCESS_COARSE_LOCATION
             ))
+        } else {
+            permissionsHandled = true
         }
     }
 
-    // Validate input only after interaction
-    fun validateInput(): String? {
-        return when {
-            workerIdOrUsername.isEmpty() -> "Username cannot be empty"
-            pin.length != 4 -> "PIN must be 4 digits"
-            else -> null
+    LaunchedEffect(permissionsHandled) {
+        if (permissionsHandled) {
+            delay(100)
+            isNewUser = detectNewUser(context)
+            if (isNewUser) {
+                showHint = true
+                showAnimatedHint = true
+                coroutineScope.launch {
+                    delay(3000)
+                    hintStep = 1
+                    delay(5000)
+                    hintStep = 2
+                }
+            }
         }
     }
 
-    val inputError by remember(hasInteracted, workerIdOrUsername, pin) {
-        derivedStateOf {
-            if (hasInteracted) validateInput() else null
+    // =================================================================
+    // VALIDATION & ERROR HANDLING
+    // =================================================================
+    fun handleLoginFail(username: String) {
+        val prefs = context.getSharedPreferences("empower_prefs", Context.MODE_PRIVATE)
+        if (isNewUser && username.isNotEmpty()) {
+            prefs.edit { putString("attempted_username", username) }
+            hintStep = 2
+            loginError = "Account not found. Make sure you have registered first or check username"
+        } else {
+            loginError = "Invalid username or PIN"
         }
     }
 
-    // Handle login errors
+    fun validateInput(): String? = when {
+        workerIdOrUsername.isEmpty() -> "Username cannot be empty"
+        pin.length != 4 -> "PIN must be 4 digits"
+        else -> null
+    }
+
+    var inputError by remember { mutableStateOf<String?>(null) }
+
+    fun onLoginClick() {
+        inputError = validateInput()
+        if (inputError == null) {
+            coroutineScope.launch {
+                viewModel.login(workerIdOrUsername, pin, context)
+            }
+        }
+    }
+
+    // =================================================================
+    // SIDE EFFECTS
+    // =================================================================
     LaunchedEffect(loginErrorState) {
         loginErrorState?.let { message ->
             loginError = message
             coroutineScope.launch {
-                try {
-                    snackbarHostState.showSnackbar(
-                        message = message,
-                        actionLabel = "Dismiss",
-                        duration = SnackbarDuration.Long
-                    )
-                    Timber.tag("LoginScreen").e("Login error Snackbar shown: Message= %s", message)
-                    viewModel.clearCheckInState()
-                } catch (e: Exception) {
-                    Timber.tag("LoginScreen").e(e, "Failed to show login error Snackbar")
-                }
+                snackbarHostState.showSnackbar(
+                    message = message,
+                    actionLabel = "Dismiss",
+                    duration = SnackbarDuration.Long
+                )
+                viewModel.clearCheckInState()
             }
         }
     }
 
-    // Navigate on successful login
     LaunchedEffect(viewModel.token.value) {
         if (viewModel.token.value != null) {
+            val prefs = context.getSharedPreferences("empower_prefs", Context.MODE_PRIVATE)
+            prefs.edit {
+                putBoolean("has_logged_in", true)
+                putBoolean("has_registered", true)
+                putString("last_username", workerIdOrUsername)
+            }
             val workerId = PrefsHelper.getWorkerId(context)
             if (workerId != null) {
                 FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
                     if (task.isSuccessful) {
-                        val fcmToken = task.result
                         coroutineScope.launch {
-                            viewModel.updateFcmToken(fcmToken, context)
+                            viewModel.updateFcmToken(task.result, context)
                         }
-                    } else {
-                        Timber.e("Failed to get FCM token: ${task.exception?.message}")
                     }
                 }
             }
             onLoginSuccess()
-            navController.navigate("home") {
-                popUpTo("login") { inclusive = true }
-            }
-            Timber.d("LoginScreen: Navigating to HomeScreen")
-        } else {
-            Timber.d("LoginScreen: Navigation blocked, token=${viewModel.token.value}")
+            navController.navigate("home") { popUpTo("login") { inclusive = true } }
         }
     }
 
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) }
-    ) { padding ->
+    // =================================================================
+    // MAIN UI
+    // =================================================================
+    Scaffold(snackbarHost = { SnackbarHost(snackbarHostState) }) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -173,43 +231,91 @@ fun LoginScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
+            // Animated Welcome Banner
+            AnimatedVisibility(
+                visible = showAnimatedHint,
+                enter = slideInVertically() + fadeIn(),
+                exit = slideOutVertically() + fadeOut()
+            ) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(
+                            imageVector = if (hintStep < 2) Icons.Default.Star else Icons.Default.Add,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = when (hintStep) {
+                                0 -> "Welcome to EmpowerSWR!"
+                                1 -> "You need to register if you have not used Luksave before"
+                                2 -> "To register, click the 'Register Now' Button"
+                                else -> ""
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = when (hintStep) {
+                                0 -> "Get started.  Register in 2 minutes"
+                                1 -> "Call us if unsure"
+                                2 -> "Click 'Register Now' button to register"
+                                else -> ""
+                            },
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+
+            // Title
             Text(
                 text = "Log in to EmpowerSWR",
                 style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onSurface,
                 fontWeight = FontWeight.Bold
             )
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Contextual Subtitle
             Text(
-                text = "Enter your Username (or worker ID) and 4-digit PIN",
+                text = when {
+                    isNewUser && hintStep == 0 -> "First time? We'll guide you!"
+                    isNewUser && hintStep == 2 -> "Step 2: Register (2 minutes)"
+                    else -> "Enter your Username and 4-digit PIN"
+                },
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Spacer(modifier = Modifier.height(16.dp))
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Input Fields
             OutlinedTextField(
                 value = workerIdOrUsername,
-                onValueChange = {
-                    workerIdOrUsername = it.trim()
-                    hasInteracted = true
+                onValueChange = { workerIdOrUsername = it.trim() },
+                label = {
+                    Text(if (isNewUser && hintStep == 1) "Worker ID (from badge)" else "Username")
                 },
-                label = { Text("Username") },
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Text,
-                    imeAction = ImeAction.Next
-                ),
-                keyboardActions = KeyboardActions(
-                    onNext = { hasInteracted = true }
-                ),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Next),
+                keyboardActions = KeyboardActions(onNext = { /* Focus to PIN */ }),
                 isError = inputError != null,
                 modifier = Modifier.fillMaxWidth()
             )
+
             Spacer(modifier = Modifier.height(8.dp))
             OutlinedTextField(
                 value = pin,
-                onValueChange = {
-                    pin = it.take(4)
-                    hasInteracted = true
-                },
+                onValueChange = { pin = it.take(4) },
                 label = { Text("4-Digit PIN") },
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.NumberPassword,
@@ -218,18 +324,15 @@ fun LoginScreen(
                 keyboardActions = KeyboardActions(
                     onDone = {
                         keyboardController?.hide()
-                        hasInteracted = true
-                        if (inputError == null) {
-                            coroutineScope.launch {
-                                viewModel.login(workerIdOrUsername, pin, context)
-                            }
-                        }
+                        onLoginClick()
                     }
                 ),
                 visualTransformation = PasswordVisualTransformation(),
                 isError = inputError != null,
                 modifier = Modifier.fillMaxWidth()
             )
+
+            // Error Messages
             inputError?.let {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
@@ -256,31 +359,49 @@ fun LoginScreen(
                     modifier = Modifier.fillMaxWidth()
                 )
             }
+
             Spacer(modifier = Modifier.height(16.dp))
+
+            // Login Button
             Button(
                 onClick = {
                     keyboardController?.hide()
-                    hasInteracted = true
-                    if (inputError == null) {
-                        coroutineScope.launch {
-                            viewModel.login(workerIdOrUsername, pin, context)
-                        }
-                    }
+                    onLoginClick()
                 },
                 modifier = Modifier.fillMaxWidth(),
                 enabled = workerIdOrUsername.isNotEmpty() && pin.isNotEmpty()
             ) {
                 Text("Log In")
             }
+
             Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = "Don't have an account? Register here",
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.clickable {
-                    navController.navigate("registration")
-                }
-            )
+
+            // SINGLE Register Button - Dynamic Colors
+            val prefs = context.getSharedPreferences("empower_prefs", Context.MODE_PRIVATE)
+            val hasRegistered = prefs.getBoolean("has_registered", false)
+            val isRegistrationRequired = isNewUser || !hasRegistered
+            Button(
+                onClick = { navController.navigate("registration") },
+                colors = if (isRegistrationRequired) {
+                    ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.inversePrimary)
+                } else {
+                    ButtonDefaults.filledTonalButtonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = if (isNewUser) "Register here →" else "Register here",
+                    color = if (isRegistrationRequired) {
+                        MaterialTheme.colorScheme.onPrimary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+            }
+
             Spacer(modifier = Modifier.height(16.dp))
+
+            // Permission Button
             Button(
                 onClick = {
                     coroutineScope.launch {
@@ -293,23 +414,15 @@ fun LoginScreen(
                                 Manifest.permission.ACCESS_COARSE_LOCATION
                             ))
                         } else {
-                            try {
-                                snackbarHostState.showSnackbar(
-                                    message = "Location permission already granted",
-                                    actionLabel = "Dismiss",
-                                    duration = SnackbarDuration.Short
-                                )
-                                Timber.d("Location permission: Snackbar shown successfully")
-                            } catch (e: Exception) {
-                                Timber.e(e, "Location permission: Failed to show snackbar")
-                                loginError = "Failed to show permission status"
-                            }
+                            snackbarHostState.showSnackbar(
+                                message = "Location permission already granted",
+                                actionLabel = "Dismiss",
+                                duration = SnackbarDuration.Short
+                            )
                         }
                     }
                 },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp),
+                modifier = Modifier.fillMaxWidth(),
                 enabled = ContextCompat.checkSelfPermission(
                     context,
                     Manifest.permission.ACCESS_FINE_LOCATION
@@ -320,31 +433,29 @@ fun LoginScreen(
         }
     }
 
-    // Settings prompt dialog
+    // =================================================================
+    // SETTINGS DIALOG
+    // =================================================================
     if (showSettingsPrompt) {
         AlertDialog(
-            onDismissRequest = { showSettingsPrompt = false },
-            title = { Text("Permission Required") },
-            text = { Text("Location permission is required for check-in. Please enable it in app settings.") },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        showSettingsPrompt = false
-                        val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                        intent.data = Uri.fromParts("package", context.packageName, null)
-                        settingsLauncher.launch(intent)
-                    }
-                ) {
-                    Text("Open Settings")
-                }
+            onDismissRequest = {
+                showSettingsPrompt = false
+                permissionsHandled = true
             },
-            dismissButton = {
-                Button(
-                    onClick = { showSettingsPrompt = false }
-                ) {
-                    Text("Cancel")
-                }
-            }
+            title = { Text("Permission Required") },
+            text = { Text("Location permission is required for check-in.") },
+            confirmButton = {
+                Button(onClick = {
+                    showSettingsPrompt = false
+                    val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                        .setData(Uri.fromParts("package", context.packageName, null))
+                    settingsLauncher.launch(intent)
+                }) { Text("Open Settings") }
+            },
+            dismissButton = { Button(onClick = {
+                showSettingsPrompt = false
+                permissionsHandled = true
+            }) { Text("Cancel") } }
         )
     }
 }

@@ -34,3 +34,8 @@ google-services.json
 
 # From remote .gitignore (if applicable)
 .DS_Store
+
+# Built application files
+*.apk
+*.aab
+*.ap_

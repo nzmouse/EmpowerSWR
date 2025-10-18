@@ -557,7 +557,7 @@ fun HomeScreen(
                                         text = "ACTION REQUIRED: Your contract is ready to sign!",
                                         style = MaterialTheme.typography.bodyLarge,
                                         fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.primary
+                                        color = MaterialTheme.colorScheme.error
                                     )
                                     Spacer(modifier = Modifier.height(12.dp))
                                     Button(
@@ -576,7 +576,7 @@ fun HomeScreen(
                                         ),
                                         enabled = !isSigningContract
                                     ) {
-                                        Text("Sign Contract Now", style = MaterialTheme.typography.labelLarge)
+                                        Text("OK!  Bae mi kam saen wantaem", style = MaterialTheme.typography.labelLarge)
                                     }
                                 }
                             }

@@ -38,7 +38,6 @@ import com.empowerswr.luksave.network.FileItem
 import com.empowerswr.luksave.network.ListFilesService
 import com.empowerswr.luksave.network.UploadService
 import com.empowerswr.luksave.PrefsHelper
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
@@ -58,8 +57,7 @@ import timber.log.Timber
 fun DocumentsScreen(
     uploadService: UploadService,
     listFilesService: ListFilesService,
-    navController: NavController,
-    downloadCompleteFlow: SharedFlow<Pair<Long, String>>
+    navController: NavController
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()

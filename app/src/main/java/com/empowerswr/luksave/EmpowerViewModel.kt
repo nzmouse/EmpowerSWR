@@ -71,6 +71,9 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
     private val _flightDetails = mutableStateOf<FlightDetails?>(null)
     val flightDetails: State<FlightDetails?> = _flightDetails
 
+    private val _inboundFlightDetails = mutableStateOf<InboundFlightDetails?>(null)
+    val inboundFlightDetails: State<InboundFlightDetails?> = _inboundFlightDetails
+
     private val _pdbDetails = mutableStateOf<PdbDetails?>(null)
     val pdbDetails: State<PdbDetails?> = _pdbDetails
 
@@ -611,7 +614,38 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
             }
         }
     }
+    // Update fetchInboundFlightDetails
+    fun fetchInboundFlightDetails(
+        context: Context,
+        callback: ((Exception?) -> Unit)? = null
+    ) {
+        viewModelScope.launch {
+            try {
+                val workerId = PrefsHelper.getWorkerId(context)
+                val currentToken = _token.value ?: run {
+                    _inboundFlightDetails.value = null  // ✅ FIXED
+                    callback?.invoke(Exception("No token available"))
+                    return@launch
+                }
 
+                if (workerId == null || currentToken == null) {  // ✅ Now SAFE
+                    _inboundFlightDetails.value = null
+                    callback?.invoke(Exception("No worker ID or token available"))
+                    return@launch
+                }
+
+                val response = api.getInboundFlightDetails(workerId, currentToken)
+
+                _inboundFlightDetails.value = response
+                callback?.invoke(null)
+
+            } catch (e: Exception) {
+                Timber.tag("EmpowerViewModel").e(e, "Error fetching inbound flight details")
+                _inboundFlightDetails.value = null
+                callback?.invoke(e)
+            }
+        }
+    }
     // Update fetchPdbDetails
     fun fetchPdbDetails(context: Context, onError: (Throwable?) -> Unit) {
         val workerId = PrefsHelper.getWorkerId(context) ?: run {

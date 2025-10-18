@@ -492,8 +492,12 @@ fun NavigationSetup(viewModel: EmpowerViewModel, downloadCompleteFlow: SharedFlo
                 DocumentsScreen(
                     uploadService = NetworkModule.uploadService,
                     listFilesService = NetworkModule.listFilesService,
-                    navController = navController,
-                    downloadCompleteFlow = downloadCompleteFlow
+                    navController = navController
+                )
+            }
+            composable("settings") {
+                SettingsScreen(
+                    navController = navController
                 )
             }
             composable(
@@ -525,6 +529,7 @@ fun NavigationSetup(viewModel: EmpowerViewModel, downloadCompleteFlow: SharedFlo
                     navController = navController
                 )
             }
+
             composable("edit_passport") {
                 EditPassportScreen(
                     viewModel = viewModel,

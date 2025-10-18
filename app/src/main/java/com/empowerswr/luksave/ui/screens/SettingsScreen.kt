@@ -309,7 +309,7 @@ fun SettingsScreen(navController: NavController) {
         Spacer(modifier = Modifier.height(16.dp))
         Text(
             text = "© 2025 EmpowerSWR. All rights reserved.\n" +
-                    "Luksave App, Version 1.1.0 (Banana)\n" +
+                    "Luksave App, Version 0.9.0 (RC-2)\n" +
                     "This application is open source under the GNU AGPLv3 license due to the use of iText. " +
                     "Luksave is the first recruiting app of its kind in the South West Pacific. " +
                     "Unauthorized reproduction or distribution is prohibited.",

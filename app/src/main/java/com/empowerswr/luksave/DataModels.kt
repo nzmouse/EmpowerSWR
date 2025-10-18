@@ -84,6 +84,12 @@ data class FlightDetails(
     @SerializedName("surname") val surname: String?,
     @SerializedName("flightStatus") val flightStatus: String?
 )
+data class InboundFlightDetails(
+    val flightNo: String?,
+    val flight:String?,
+    val arrivalDate: String?,
+    val flightFrom: String?
+)
 data class PdbDetails(
     @SerializedName("startDate") val startDate: String?,
     @SerializedName("endDate") val endDate: String? = null,

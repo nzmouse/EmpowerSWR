@@ -382,8 +382,10 @@ fun FlightsScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val localContext = LocalContext.current
     val flightDetails by viewModel.flightDetails
+    val inboundFlightDetails by viewModel.inboundFlightDetails
     val pdbDetails by viewModel.pdbDetails
     var flightError by remember { mutableStateOf<String?>(null) }
+    var inboundError by remember { mutableStateOf<String?>(null) }
     var pdbError by remember { mutableStateOf<String?>(null) }
     var isRefreshing by remember { mutableStateOf(false) }
     val token by viewModel.token
@@ -478,6 +480,20 @@ fun FlightsScreen(
                                     flightError = null
                                 }
                             }
+                            viewModel.fetchInboundFlightDetails(localContext) { error ->
+                                if (error != null) {
+                                    Timber.tag("FlightsScreen").e(error, "Inbound flight fetch error on resume")
+                                    inboundError = error.message ?: "Failed to load inbound flight details"
+                                    if (System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
+                                        coroutineScope.launch {
+                                            snackbarHostState.showSnackbar("Check your internet and try again")
+                                            lastNetworkErrorShown = System.currentTimeMillis()
+                                        }
+                                    }
+                                } else {
+                                    inboundError = null
+                                }
+                            }
                             viewModel.fetchPdbDetails(localContext) { error ->
                                 if (error != null && error.message != "No pre-departure details available") {
                                     Timber.tag("FlightsScreen").e(error, "PDB fetch error on resume")
@@ -525,49 +541,16 @@ fun FlightsScreen(
         } else if (isNetworkAvailable.value && isScreenActive.value) {
             val workerId = PrefsHelper.getWorkerId(context)
             if (workerId != null) {
-                viewModel.fetchFlightDetails(localContext) { error ->
-                    if (error != null) {
-                        Timber.tag("FlightsScreen").e(error, "Flight fetch error")
-                        flightError = error.message ?: "Failed to load flight details"
-                        if (System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
-                            coroutineScope.launch {
-                                snackbarHostState.showSnackbar("Check your internet and try again")
-                                lastNetworkErrorShown = System.currentTimeMillis()
-                            }
-                        }
-                    } else {
-                        flightError = null
-                    }
-                }
-                viewModel.fetchPdbDetails(localContext) { error ->
-                    if (error != null && error.message != "No pre-departure details available") {
-                        Timber.tag("FlightsScreen").e(error, "PDB fetch error")
-                        pdbError = error.message ?: "Failed to load PDB details"
-                        if (System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
-                            coroutineScope.launch {
-                                snackbarHostState.showSnackbar("Check your internet and try again")
-                                lastNetworkErrorShown = System.currentTimeMillis()
-                            }
-                        }
-                    } else {
-                        pdbError = null
-                    }
-                }
-            } else {
-                Timber.tag("FlightsScreen").e("No worker ID available")
-                flightError = "No worker ID available"
-                pdbError = "No worker ID available"
-            }
-        } else if (!isNetworkAvailable.value) {
-            Timber.w("No network, skipping data fetch")
-            if (System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
-                coroutineScope.launch {
-                    snackbarHostState.showSnackbar("Check your internet and try again")
-                    lastNetworkErrorShown = System.currentTimeMillis()
+                // ✅ DEDUPE: Only fetch if screen was ACTIVE > 30 seconds
+                if (isScreenActive.value && System.currentTimeMillis() - lastNetworkErrorShown > 30000) {
+                    Timber.i("Timer fetch - Flight")
+                    viewModel.fetchFlightDetails(localContext) { error -> /* ... */ }
+                    Timber.i("Timer fetch - Inbound")
+                    viewModel.fetchInboundFlightDetails(localContext) { error -> /* ... */ }
+                    Timber.i("Timer fetch - PDB")
+                    viewModel.fetchPdbDetails(localContext) { error -> /* ... */ }
                 }
             }
-        } else {
-            Timber.w("Screen inactive, skipping data fetch")
         }
     }
 
@@ -588,6 +571,15 @@ fun FlightsScreen(
                                     hasNetworkError = true
                                 } else {
                                     flightError = null
+                                }
+                            }
+                            viewModel.fetchInboundFlightDetails(localContext) { error ->
+                                if (error != null) {
+                                    Timber.tag("FlightsScreen").e(error, "Inbound flight refresh error")
+                                    inboundError = error.message ?: "Failed to refresh inbound flight details"
+                                    hasNetworkError = true
+                                } else {
+                                    inboundError = null
                                 }
                             }
                             viewModel.fetchPdbDetails(localContext) { error ->
@@ -613,6 +605,7 @@ fun FlightsScreen(
                         } else {
                             Timber.tag("FlightsScreen").e("No worker ID available for refresh")
                             flightError = "No worker ID available"
+                            inboundError = "No worker ID available"
                             pdbError = "No worker ID available"
                         }
                     }
@@ -666,6 +659,29 @@ fun FlightsScreen(
                                 hasNetworkError = true
                             }
 
+                            // Wrap inbound flight details fetch in a timeout
+                            withTimeoutOrNull(10000L) {
+                                var fetchCompleted = false
+                                viewModel.fetchInboundFlightDetails(localContext) { error ->
+                                    fetchCompleted = true
+                                    if (error != null) {
+                                        Timber.tag("FlightsScreen").e(error, "Inbound flight refresh error")
+                                        inboundError = error.message ?: "Failed to refresh inbound flight details"
+                                        hasNetworkError = true
+                                    } else {
+                                        inboundError = null
+                                    }
+                                }
+                                // Wait for callback to complete
+                                while (!fetchCompleted) {
+                                    delay(100)
+                                }
+                            } ?: run {
+                                Timber.tag("FlightsScreen").e("Inbound flight details fetch timed out")
+                                inboundError = "Inbound flight details fetch timed out"
+                                hasNetworkError = true
+                            }
+
                             // Wrap PDB details fetch in a timeout
                             withTimeoutOrNull(10000L) {
                                 var fetchCompleted = false
@@ -703,6 +719,11 @@ fun FlightsScreen(
                                 !isScreenActive.value -> "Screen inactive"
                                 else -> "No worker ID available"
                             }
+                            inboundError = when {
+                                !isNetworkAvailable.value -> "No network connection"
+                                !isScreenActive.value -> "Screen inactive"
+                                else -> "No worker ID available"
+                            }
                             pdbError = when {
                                 !isNetworkAvailable.value -> "No network connection"
                                 !isScreenActive.value -> "Screen inactive"
@@ -716,6 +737,7 @@ fun FlightsScreen(
                     } catch (e: Exception) {
                         Timber.tag("FlightsScreen").e(e, "Unexpected refresh error")
                         flightError = "Refresh failed: ${e.message}"
+                        inboundError = "Refresh failed: ${e.message}"
                         pdbError = "Refresh failed: ${e.message}"
                         if (System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
                             snackbarHostState.showSnackbar("Check your internet and try again")
@@ -729,405 +751,330 @@ fun FlightsScreen(
             modifier = Modifier.fillMaxSize()
         )
         { Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(padding)
-                    .padding(horizontal = 16.dp)
-                    .verticalScroll(scrollState)
-                    .imePadding(),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    text = "Flights and Pre-Departure",
-                    style = MaterialTheme.typography.headlineMedium.copy(fontSize = 28.sp),
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(vertical = 16.dp)
-                )
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(padding)
+                .padding(horizontal = 16.dp)
+                .verticalScroll(scrollState)
+                .imePadding(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "Flights and Pre-Departure",
+                style = MaterialTheme.typography.headlineMedium.copy(fontSize = 28.sp),
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(vertical = 16.dp)
+            )
 
-                // Pre-Departure Details Card
-                pdbDetails?.let { details ->
-                    val isInternalPdbExpired = isPdbInternalExpired(details.internalPdb)
-                    val hasValidPdb = (details.startDate != null || details.endDate != null) &&
-                            (isValidPdbDate(details.startDate) || isValidPdbDate(details.endDate))
-                    val hasValidInternalPdb = details.internalPdb != null && !isInternalPdbExpired
+            // Pre-Departure Details Card
+            pdbDetails?.let { details ->
+                val isInternalPdbExpired = isPdbInternalExpired(details.internalPdb)
+                val hasValidPdb = (details.startDate != null || details.endDate != null) &&
+                        (isValidPdbDate(details.startDate) || isValidPdbDate(details.endDate))
+                val hasValidInternalPdb = details.internalPdb != null && !isInternalPdbExpired
 
-                    if (hasValidPdb || hasValidInternalPdb) {
-                        Card(
+                if (hasValidPdb || hasValidInternalPdb) {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            contentColor = MaterialTheme.colorScheme.onSurface
+                        ),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), // Blue-gray outline
+                    ) {
+                        Column(
                             modifier = Modifier
+                                .padding(16.dp)
                                 .fillMaxWidth()
-                                .padding(vertical = 8.dp),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surface,
-                                contentColor = MaterialTheme.colorScheme.onSurface
-                            ),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), // Blue-gray outline
                         ) {
-                            Column(
-                                modifier = Modifier
-                                    .padding(16.dp)
-                                    .fillMaxWidth()
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.LocationOn,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(28.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = "Pre-Departure Details",
-                                        style = MaterialTheme.typography.titleLarge.copy(fontSize = 20.sp),
-                                        color = MaterialTheme.colorScheme.primary,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(12.dp))
-                                // PDB Subcard
-                                if (hasValidPdb) {
-                                    Card(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                                        shape = RoundedCornerShape(12.dp),
-                                        colors = CardDefaults.cardColors(
-                                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                                            contentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    ) {
-                                        Column(
-                                            modifier = Modifier.padding(12.dp)
-                                        ) {
-                                            Text(
-                                                text = "Pre Departure",
-                                                style = MaterialTheme.typography.titleMedium.copy(
-                                                    fontSize = 18.sp
-                                                ),
-                                                color = MaterialTheme.colorScheme.onSurface,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
-                                            Spacer(modifier = Modifier.height(8.dp))
-                                            Text(
-                                                text = formatPdbDate(details.startDate),
-                                                style = MaterialTheme.typography.bodyLarge.copy(
-                                                    fontSize = 16.sp
-                                                ),
-                                                color = MaterialTheme.colorScheme.onSurface
-                                            )
-                                            if (details.schemes == "PALM" && details.endDate != null) {
-                                                Spacer(modifier = Modifier.height(8.dp))
-                                                Text(
-                                                    text = formatPdbDate(details.endDate),
-                                                    style = MaterialTheme.typography.bodyLarge.copy(
-                                                        fontSize = 16.sp
-                                                    ),
-                                                    color = MaterialTheme.colorScheme.onSurface
-                                                )
-                                            }
-                                            Spacer(modifier = Modifier.height(8.dp))
-                                            Text(
-                                                text = details.pdbLocationLong ?: "N/A",
-                                                style = MaterialTheme.typography.bodyLarge.copy(
-                                                    fontSize = 16.sp
-                                                ),
-                                                color = MaterialTheme.colorScheme.onSurface
-                                            )
-                                            Spacer(modifier = Modifier.height(12.dp))
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.SpaceBetween
-                                            ) {
-                                                OutlinedButton(
-                                                    onClick = {
-                                                        val lat = details.pdbLat
-                                                        val lng = details.pdbLong
-
-                                                        if (lat != null && lng != null) {
-                                                            val label = details.pdbLocationLong
-                                                                ?: "PDB Location"
-                                                            val uri =
-                                                                "geo:$lat,$lng?q=$lat,$lng($label)&z=15".toUri()
-                                                            val intent = Intent(
-                                                                Intent.ACTION_VIEW,
-                                                                uri
-                                                            ).apply {
-                                                                setPackage("com.google.android.apps.maps")
-                                                            }
-                                                            try {
-                                                                localContext.startActivity(intent)
-                                                            } catch (e: Exception) {
-                                                                Timber.tag("FlightsScreen").e(e,"Map open error")
-                                                            }
-                                                        } else {
-                                                            Timber.tag("FlightsScreen").e("No location coordinates available")
-                                                        }
-                                                    },
-                                                    modifier = Modifier.weight(1f)
-                                                        .padding(end = 8.dp),
-                                                    shape = RoundedCornerShape(12.dp)
-                                                ) {
-                                                    Icon(
-                                                        imageVector = Icons.Default.LocationOn,
-                                                        contentDescription = null,
-                                                        tint = MaterialTheme.colorScheme.primary
-                                                    )
-                                                    Spacer(modifier = Modifier.width(8.dp))
-                                                    Text("Open in Maps")
-                                                }
-                                                if (isTodayPdbDate(details.startDate) || isTodayPdbDate(
-                                                        details.endDate,)) {
-                                                    Button(
-                                                        onClick = {
-                                                            val workerId =
-                                                                PrefsHelper.getWorkerId(localContext)
-                                                            if (workerId == null) {
-                                                                Timber.tag("FlightsScreen").e("No worker ID available for PDB confirmation")
-                                                                coroutineScope.launch {
-                                                                    snackbarHostState.showSnackbar("No worker ID available.")
-                                                                }
-                                                                return@Button
-                                                            }
-                                                            val action = getPdbAction(
-                                                                details.startDate,
-                                                                details.endDate
-                                                            )
-                                                            requestLocationAndPerformAction(
-                                                                workerId = workerId,
-                                                                action = action,
-                                                                onSuccess = { lat, lng ->
-                                                                    viewModel.saveLocation(
-                                                                        localContext,
-                                                                        lat,
-                                                                        lng,
-                                                                        action
-                                                                    )
-                                                                    coroutineScope.launch {
-                                                                        snackbarHostState.showSnackbar(
-                                                                            "You're checked in at PDB!"
-                                                                        )
-                                                                    }
-                                                                },
-                                                                onFailure = { message ->
-                                                                    coroutineScope.launch {
-                                                                        snackbarHostState.showSnackbar(
-                                                                            message
-                                                                        )
-                                                                    }
-                                                                }
-                                                            )
-                                                        },
-                                                        modifier = Modifier.weight(1f),
-                                                        shape = RoundedCornerShape(12.dp)
-                                                    ) {
-                                                        Icon(
-                                                            imageVector = Icons.Default.ThumbUp,
-                                                            contentDescription = null,
-                                                            tint = MaterialTheme.colorScheme.onPrimary
-                                                        )
-                                                        Spacer(modifier = Modifier.width(8.dp))
-                                                        Text("Mi stap lo PDB")
-                                                    }
-                                                }
-                                            }
-                                            if (details.pdbStatus == "None" || details.pdbStatus == "Messaged") {
-                                                Spacer(modifier = Modifier.height(12.dp))
-                                                Button(
-                                                    onClick = {
-                                                        val workerId =
-                                                            PrefsHelper.getWorkerId(localContext)
-                                                        if (workerId == null) {
-                                                            Timber.tag("FlightsScreen").e("No worker ID available for PDB status update")
-                                                            coroutineScope.launch {
-                                                                snackbarHostState.showSnackbar("No worker ID available.")
-                                                            }
-                                                            return@Button
-                                                        }
-                                                        viewModel.updatePdbStatus(localContext) { success, message ->
-                                                            coroutineScope.launch {
-                                                                if (success) {
-                                                                    snackbarHostState.showSnackbar("Great! Your PDB is confirmed!")
-                                                                } else {
-                                                                    snackbarHostState.showSnackbar("Something went wrong. Try again")
-                                                                }
-                                                            }
-                                                        }
-                                                    },
-                                                    modifier = Modifier.fillMaxWidth(),
-                                                    shape = RoundedCornerShape(12.dp)
-                                                ) {
-                                                    Icon(
-                                                        imageVector = Icons.Default.ThumbUp,
-                                                        contentDescription = null,
-                                                        tint = MaterialTheme.colorScheme.onPrimary
-                                                    )
-                                                    Spacer(modifier = Modifier.width(8.dp))
-                                                    Text("Tankyu. Bae mi go")
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                // Internal PDB Subcard
-                                if (hasValidInternalPdb) {
-                                    Spacer(modifier = Modifier.height(12.dp))
-                                    Card(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                                        shape = RoundedCornerShape(12.dp),
-                                        colors = CardDefaults.cardColors(
-                                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                                            contentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    ) {
-                                        Column(
-                                            modifier = Modifier.padding(12.dp)
-                                        ) {
-                                            Text(
-                                                text = "Internal PDB (at our office)",
-                                                style = MaterialTheme.typography.titleMedium.copy(
-                                                    fontSize = 18.sp
-                                                ),
-                                                color = MaterialTheme.colorScheme.onSurface,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
-                                            Spacer(modifier = Modifier.height(8.dp))
-                                            Text(
-                                                text = formatPdbInternalDate(details.internalPdb),
-                                                style = MaterialTheme.typography.bodyLarge.copy(
-                                                    fontSize = 16.sp
-                                                ),
-                                                color = MaterialTheme.colorScheme.onSurface
-                                            )
-                                            Spacer(modifier = Modifier.height(8.dp))
-                                            Text(
-                                                text = "Internal PDB Status: ${details.internalPdbStatus ?: "N/A"}",
-                                                style = MaterialTheme.typography.bodyLarge.copy(
-                                                    fontSize = 16.sp
-                                                ),
-                                                color = MaterialTheme.colorScheme.onSurface
-                                            )
-                                            if (details.internalPdbStatus == "Unaware" || details.internalPdbStatus == "Messaged") {
-                                                Spacer(modifier = Modifier.height(8.dp))
-                                                Button(
-                                                    onClick = {
-                                                        val workerId =
-                                                            PrefsHelper.getWorkerId(localContext)
-                                                        if (workerId == null) {
-                                                            Timber.tag("FlightsScreen").e("No worker ID available for Internal PDB status update")
-                                                            coroutineScope.launch {
-                                                                snackbarHostState.showSnackbar("No worker ID available.")
-                                                            }
-                                                            return@Button
-                                                        }
-                                                        viewModel.updatePdbInternalStatus(localContext) { success, message ->
-                                                            Timber.i("Internal PDB status update result: success=%b, message=%s", success, message)
-                                                            coroutineScope.launch {
-                                                                if (success) {
-                                                                    snackbarHostState.showSnackbar("Awesome! Internal PDB confirmed!")
-                                                                } else {
-                                                                    snackbarHostState.showSnackbar("Something went wrong. Try again")
-                                                                }
-                                                            }
-                                                        }
-                                                    },
-                                                    modifier = Modifier.fillMaxWidth(),
-                                                    shape = RoundedCornerShape(12.dp)
-                                                ) {
-                                                    Icon(
-                                                        imageVector = Icons.Default.ThumbUp,
-                                                        contentDescription = null,
-                                                        tint = MaterialTheme.colorScheme.onPrimary
-                                                    )
-                                                    Spacer(modifier = Modifier.width(8.dp))
-                                                    Text("Confirm Internal PDB Status")
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        Timber.i("PDB expired or invalid")
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 8.dp),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surface,
-                                contentColor = MaterialTheme.colorScheme.onSurface
-                            )
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(16.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.LocationOn,
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(40.dp)
+                                    modifier = Modifier.size(28.dp)
                                 )
-                                Spacer(modifier = Modifier.height(12.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = "Pre-departure details expired or unavailable",
-                                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
-                                    color = MaterialTheme.colorScheme.error,
-                                    textAlign = TextAlign.Center
+                                    text = "Pre-Departure Details",
+                                    style = MaterialTheme.typography.titleLarge.copy(fontSize = 20.sp),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.SemiBold
                                 )
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Button(
-                                    onClick = {
-                                        val workerId = PrefsHelper.getWorkerId(localContext)
-                                        if (workerId != null && token != null && isNetworkAvailable.value && isScreenActive.value) {
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+                            // PDB Subcard
+                            if (hasValidPdb) {
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(12.dp)
+                                    ) {
+                                        Text(
+                                            text = "Pre Departure",
+                                            style = MaterialTheme.typography.titleMedium.copy(
+                                                fontSize = 18.sp
+                                            ),
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            text = formatPdbDate(details.startDate),
+                                            style = MaterialTheme.typography.bodyLarge.copy(
+                                                fontSize = 16.sp
+                                            ),
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        if (details.schemes == "PALM" && details.endDate != null) {
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            Text(
+                                                text = formatPdbDate(details.endDate),
+                                                style = MaterialTheme.typography.bodyLarge.copy(
+                                                    fontSize = 16.sp
+                                                ),
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            text = details.pdbLocationLong ?: "N/A",
+                                            style = MaterialTheme.typography.bodyLarge.copy(
+                                                fontSize = 16.sp
+                                            ),
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Spacer(modifier = Modifier.height(12.dp))
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            OutlinedButton(
+                                                onClick = {
+                                                    val lat = details.pdbLat
+                                                    val lng = details.pdbLong
 
-                                            viewModel.fetchPdbDetails(localContext) { error ->
-                                                if (error != null && error.message != "No pre-departure details available") {
-
-                                                    if (System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
-                                                        coroutineScope.launch {
-                                                            snackbarHostState.showSnackbar("Check your internet and try again")
-                                                            lastNetworkErrorShown =
-                                                                System.currentTimeMillis()
+                                                    if (lat != null && lng != null) {
+                                                        val label = details.pdbLocationLong
+                                                            ?: "PDB Location"
+                                                        val uri =
+                                                            "geo:$lat,$lng?q=$lat,$lng($label)&z=15".toUri()
+                                                        val intent = Intent(
+                                                            Intent.ACTION_VIEW,
+                                                            uri
+                                                        ).apply {
+                                                            setPackage("com.google.android.apps.maps")
                                                         }
+                                                        try {
+                                                            localContext.startActivity(intent)
+                                                        } catch (e: Exception) {
+                                                            Timber.tag("FlightsScreen").e(e,"Map open error")
+                                                        }
+                                                    } else {
+                                                        Timber.tag("FlightsScreen").e("No location coordinates available")
                                                     }
-                                                } else {
-                                                    pdbError = null
-                                                }
+                                                },
+                                                modifier = Modifier.weight(1f)
+                                                    .padding(end = 8.dp),
+                                                shape = RoundedCornerShape(12.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.LocationOn,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.primary
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text("Open in Maps")
                                             }
-                                        } else {
-                                            Timber.tag("FlightsScreen").e("No worker ID, token, network, or screen inactive for retry")
-                                            if (!isNetworkAvailable.value && System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
-                                                coroutineScope.launch {
-                                                    snackbarHostState.showSnackbar("Check your internet and try again")
-                                                    lastNetworkErrorShown =
-                                                        System.currentTimeMillis()
-                                                }
-                                            } else if (token == null) {
-                                                navController.navigate("login") {
-                                                    popUpTo(navController.graph.startDestinationId) {
-                                                        inclusive = true
-                                                    }
-                                                    launchSingleTop = true
+                                            if (isTodayPdbDate(details.startDate) || isTodayPdbDate(
+                                                    details.endDate)) {
+                                                Button(
+                                                    onClick = {
+                                                        val workerId =
+                                                            PrefsHelper.getWorkerId(localContext)
+                                                        if (workerId == null) {
+                                                            Timber.tag("FlightsScreen").e("No worker ID available for PDB confirmation")
+                                                            coroutineScope.launch {
+                                                                snackbarHostState.showSnackbar("No worker ID available.")
+                                                            }
+                                                            return@Button
+                                                        }
+                                                        val action = getPdbAction(
+                                                            details.startDate,
+                                                            details.endDate
+                                                        )
+                                                        requestLocationAndPerformAction(
+                                                            workerId = workerId,
+                                                            action = action,
+                                                            onSuccess = { lat, lng ->
+                                                                viewModel.saveLocation(
+                                                                    localContext,
+                                                                    lat,
+                                                                    lng,
+                                                                    action
+                                                                )
+                                                                coroutineScope.launch {
+                                                                    snackbarHostState.showSnackbar(
+                                                                        "You're checked in at PDB!"
+                                                                    )
+                                                                }
+                                                            },
+                                                            onFailure = { message ->
+                                                                coroutineScope.launch {
+                                                                    snackbarHostState.showSnackbar(
+                                                                        message
+                                                                    )
+                                                                }
+                                                            }
+                                                        )
+                                                    },
+                                                    modifier = Modifier.weight(1f),
+                                                    shape = RoundedCornerShape(12.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.ThumbUp,
+                                                        contentDescription = null,
+                                                        tint = MaterialTheme.colorScheme.onPrimary
+                                                    )
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    Text("Mi stap lo PDB")
                                                 }
                                             }
                                         }
-                                    },
-                                    modifier = Modifier.fillMaxWidth(0.5f),
-                                    shape = RoundedCornerShape(12.dp)
+                                        if (details.pdbStatus == "None" || details.pdbStatus == "Messaged") {
+                                            Spacer(modifier = Modifier.height(12.dp))
+                                            Button(
+                                                onClick = {
+                                                    val workerId =
+                                                        PrefsHelper.getWorkerId(localContext)
+                                                    if (workerId == null) {
+                                                        Timber.tag("FlightsScreen").e("No worker ID available for PDB status update")
+                                                        coroutineScope.launch {
+                                                            snackbarHostState.showSnackbar("No worker ID available.")
+                                                        }
+                                                        return@Button
+                                                    }
+                                                    viewModel.updatePdbStatus(localContext) { success, message ->
+                                                        coroutineScope.launch {
+                                                            if (success) {
+                                                                snackbarHostState.showSnackbar("Great! Your PDB is confirmed!")
+                                                            } else {
+                                                                snackbarHostState.showSnackbar("Something went wrong. Try again")
+                                                            }
+                                                        }
+                                                    }
+                                                },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                shape = RoundedCornerShape(12.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.ThumbUp,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.onPrimary
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text("Tankyu. Bae mi go")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            // Internal PDB Subcard
+                            if (hasValidInternalPdb) {
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 ) {
-                                    Text("Try Again")
+                                    Column(
+                                        modifier = Modifier.padding(12.dp)
+                                    ) {
+                                        Text(
+                                            text = "Internal PDB (at our office)",
+                                            style = MaterialTheme.typography.titleMedium.copy(
+                                                fontSize = 18.sp
+                                            ),
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            text = formatPdbInternalDate(details.internalPdb),
+                                            style = MaterialTheme.typography.bodyLarge.copy(
+                                                fontSize = 16.sp
+                                            ),
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            text = "Internal PDB Status: ${details.internalPdbStatus ?: "N/A"}",
+                                            style = MaterialTheme.typography.bodyLarge.copy(
+                                                fontSize = 16.sp
+                                            ),
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        if (details.internalPdbStatus == "Unaware" || details.internalPdbStatus == "Messaged") {
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            Button(
+                                                onClick = {
+                                                    val workerId =
+                                                        PrefsHelper.getWorkerId(localContext)
+                                                    if (workerId == null) {
+                                                        Timber.tag("FlightsScreen").e("No worker ID available for Internal PDB status update")
+                                                        coroutineScope.launch {
+                                                            snackbarHostState.showSnackbar("No worker ID available.")
+                                                        }
+                                                        return@Button
+                                                    }
+                                                    viewModel.updatePdbInternalStatus(localContext) { success, message ->
+                                                        Timber.i("Internal PDB status update result: success=%b, message=%s", success, message)
+                                                        coroutineScope.launch {
+                                                            if (success) {
+                                                                snackbarHostState.showSnackbar("Awesome! Internal PDB confirmed!")
+                                                            } else {
+                                                                snackbarHostState.showSnackbar("Something went wrong. Try again")
+                                                            }
+                                                        }
+                                                    }
+                                                },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                shape = RoundedCornerShape(12.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.ThumbUp,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.onPrimary
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text("Confirm Internal PDB Status")
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
-                } ?: run {
+                } else {
+                    Timber.i("PDB expired or invalid")
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1151,199 +1098,421 @@ fun FlightsScreen(
                             )
                             Spacer(modifier = Modifier.height(12.dp))
                             Text(
-                                text = pdbError ?: "No pre-departure details available yet",
+                                text = "Pre-departure details expired or unavailable",
                                 style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
                                 color = MaterialTheme.colorScheme.error,
                                 textAlign = TextAlign.Center
                             )
-                            if (pdbError != null) {
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Text(
-                                    text = "Try back later.",
-                                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                                    textAlign = TextAlign.Center
-                                )
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Button(
-                                    onClick = {
-                                        val workerId = PrefsHelper.getWorkerId(localContext)
-                                        if (workerId != null && token != null && isNetworkAvailable.value && isScreenActive.value) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Button(
+                                onClick = {
+                                    val workerId = PrefsHelper.getWorkerId(localContext)
+                                    if (workerId != null && token != null && isNetworkAvailable.value && isScreenActive.value) {
 
-                                            viewModel.fetchPdbDetails(localContext) { error ->
-                                                if (error != null && error.message != "No pre-departure details available") {
+                                        viewModel.fetchPdbDetails(localContext) { error ->
+                                            if (error != null && error.message != "No pre-departure details available") {
 
-                                                    if (System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
-                                                        coroutineScope.launch {
-                                                            snackbarHostState.showSnackbar("Check your internet and try again")
-                                                            lastNetworkErrorShown =
-                                                                System.currentTimeMillis()
-                                                        }
+                                                if (System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
+                                                    coroutineScope.launch {
+                                                        snackbarHostState.showSnackbar("Check your internet and try again")
+                                                        lastNetworkErrorShown =
+                                                            System.currentTimeMillis()
                                                     }
-                                                } else {
-
-                                                    pdbError = null
                                                 }
-                                            }
-                                        } else {
-                                            Timber.tag("FlightsScreen").e("No worker ID, token, network, or screen inactive for retry")
-                                            if (!isNetworkAvailable.value && System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
-                                                coroutineScope.launch {
-                                                    snackbarHostState.showSnackbar("Check your internet and try again")
-                                                    lastNetworkErrorShown =
-                                                        System.currentTimeMillis()
-                                                }
-                                            } else if (token == null) {
-                                                navController.navigate("login") {
-                                                    popUpTo(navController.graph.startDestinationId) {
-                                                        inclusive = true
-                                                    }
-                                                    launchSingleTop = true
-                                                }
+                                            } else {
+                                                pdbError = null
                                             }
                                         }
-                                    },
-                                    modifier = Modifier.fillMaxWidth(0.5f),
-                                    shape = RoundedCornerShape(12.dp)
-                                ) {
-                                    Text("Try Again")
-                                }
+                                    } else {
+                                        Timber.tag("FlightsScreen").e("No worker ID, token, network, or screen inactive for retry")
+                                        if (!isNetworkAvailable.value && System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
+                                            coroutineScope.launch {
+                                                snackbarHostState.showSnackbar("Check your internet and try again")
+                                                lastNetworkErrorShown =
+                                                    System.currentTimeMillis()
+                                            }
+                                        } else if (token == null) {
+                                            navController.navigate("login") {
+                                                popUpTo(navController.graph.startDestinationId) {
+                                                    inclusive = true
+                                                }
+                                                launchSingleTop = true
+                                            }
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(0.5f),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text("Try Again")
                             }
                         }
                     }
                 }
-
-                // Updated Flight Details Card
-                flightDetails?.let { details ->
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surface,
-                            contentColor = MaterialTheme.colorScheme.onSurface
-                        ),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), // Blue-gray outline
+            } ?: run {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.onSurface
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Column(
-                            modifier = Modifier
-                                .padding(16.dp)
-                                .fillMaxWidth(),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.AirplanemodeActive,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(28.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "Flight Details",
-                                    style = MaterialTheme.typography.titleLarge.copy(fontSize = 20.sp),
-                                    color = MaterialTheme.colorScheme.primary,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
-                            if (details.flightStatus == "Unaware" || details.flightStatus == "Messaged") {
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.Center
-                                ) {
-                                    Button(
-                                        onClick = {
-                                            val workerId = PrefsHelper.getWorkerId(localContext)
-                                            if (workerId == null) {
-                                                Timber.tag("FlightsScreen").e("No worker ID available for flight status update")
-                                                coroutineScope.launch {
-                                                    snackbarHostState.showSnackbar("No worker ID available.")
-                                                }
-                                                return@Button
-                                            }
-                                            viewModel.updateFlightStatus(localContext) { success, message ->
-                                                coroutineScope.launch {
-                                                    if (success) {
-                                                        snackbarHostState.showSnackbar("Flight confirmed! Ready to go!")
-                                                    } else {
-                                                        snackbarHostState.showSnackbar("Something went wrong. Try again")
+                        Icon(
+                            imageVector = Icons.Default.LocationOn,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(40.dp)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = pdbError ?: "No pre-departure details available yet",
+                            style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
+                            color = MaterialTheme.colorScheme.error,
+                            textAlign = TextAlign.Center
+                        )
+                        if (pdbError != null) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = "Try back later.",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Button(
+                                onClick = {
+                                    val workerId = PrefsHelper.getWorkerId(localContext)
+                                    if (workerId != null && token != null && isNetworkAvailable.value && isScreenActive.value) {
+
+                                        viewModel.fetchPdbDetails(localContext) { error ->
+                                            if (error != null && error.message != "No pre-departure details available") {
+
+                                                if (System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
+                                                    coroutineScope.launch {
+                                                        snackbarHostState.showSnackbar("Check your internet and try again")
+                                                        lastNetworkErrorShown =
+                                                            System.currentTimeMillis()
                                                     }
                                                 }
+                                            } else {
+
+                                                pdbError = null
                                             }
-                                        },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        shape = RoundedCornerShape(12.dp)
+                                        }
+                                    } else {
+                                        Timber.tag("FlightsScreen").e("No worker ID, token, network, or screen inactive for retry")
+                                        if (!isNetworkAvailable.value && System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
+                                            coroutineScope.launch {
+                                                snackbarHostState.showSnackbar("Check your internet and try again")
+                                                lastNetworkErrorShown =
+                                                    System.currentTimeMillis()
+                                            }
+                                        } else if (token == null) {
+                                            navController.navigate("login") {
+                                                popUpTo(navController.graph.startDestinationId) {
+                                                    inclusive = true
+                                                }
+                                                launchSingleTop = true
+                                            }
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(0.5f),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text("Try Again")
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Updated Departure Flight Details Card
+            flightDetails?.let { details ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.onSurface
+                    ),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), // Blue-gray outline
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .padding(16.dp)
+                            .fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AirplanemodeActive,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(28.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Departure Flight Details",
+                                style = MaterialTheme.typography.titleLarge.copy(fontSize = 20.sp),
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = details.teamName ?: "",
+                            style = MaterialTheme.typography.bodyLarge.copy(
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = MaterialTheme.colorScheme.primary,
+                            textAlign = TextAlign.Center // Centered text
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Flight Status: ${details.flightStatus ?: "No flight yet"}",
+                            style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
+                            color = MaterialTheme.colorScheme.onSurface,
+                            textAlign = TextAlign.Center // Centered text
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        HorizontalDivider(
+                            thickness = 1.dp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // First Leg (International)
+                        if (!details.intFlightNo.isNullOrEmpty() && !details.intDepDate.isNullOrEmpty()) {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                ),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), // Blue-gray outline
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text(
+                                        text = formatSubcardTitle(details.intDepDate),
+                                        style = MaterialTheme.typography.titleLarge.copy(
+                                            fontSize = 18.sp
+                                        ),
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        textAlign = TextAlign.Center // Centered text
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = getCheckInInfo(
+                                            details.intDepDate,
+                                            2.5,
+                                            true
+                                        ).statusText,
+                                        style = MaterialTheme.typography.titleLarge.copy(
+                                            fontSize = 18.sp
+                                        ),
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.Red,
+                                        textAlign = TextAlign.Center // Centered text
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = getCheckInInfo(
+                                            details.intDepDate,
+                                            2.5,
+                                            true
+                                        ).countdownText ?: "",
+                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                            fontSize = 14.sp
+                                        ),
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        textAlign = TextAlign.Center // Centered text
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center, // Center the row content
+                                        modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Check,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.onPrimary
+                                        AsyncImage(
+                                            model = details.intFlightNo.take(2)
+                                                .let { "https://db.nougro.com/images/airlines/$it.png" },
+                                            contentDescription = "Airline logo",
+                                            modifier = Modifier.size(48.dp),
+                                            placeholder = painterResource(id = android.R.drawable.ic_menu_gallery),
+                                            error = painterResource(id = android.R.drawable.ic_menu_close_clear_cancel)
                                         )
                                         Spacer(modifier = Modifier.width(8.dp))
-                                        Text("Tankyu tumas!  Mi save nao.")
-                                    }
-                                }
-                            }
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = details.teamName ?: "",
-                                style = MaterialTheme.typography.bodyLarge.copy(
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.Bold
-                                ),
-                                color = MaterialTheme.colorScheme.primary,
-                                textAlign = TextAlign.Center // Centered text
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = "Flight Status: ${details.flightStatus ?: "No flight yet"}",
-                                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
-                                color = MaterialTheme.colorScheme.onSurface,
-                                textAlign = TextAlign.Center // Centered text
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
-                            HorizontalDivider(
-                                thickness = 1.dp,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // First Leg (International)
-                            if (!details.intFlightNo.isNullOrEmpty() && !details.intDepDate.isNullOrEmpty()) {
-                                Card(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                                    shape = RoundedCornerShape(12.dp),
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                                    ),
-                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), // Blue-gray outline
-                                ) {
-                                    Column(
-                                        modifier = Modifier.padding(12.dp),
-                                        horizontalAlignment = Alignment.CenterHorizontally
-                                    ) {
                                         Text(
-                                            text = formatSubcardTitle(details.intDepDate),
+                                            text = "${details.intFlightNo} to ${details.intDest ?: "N/A"}",
                                             style = MaterialTheme.typography.titleLarge.copy(
                                                 fontSize = 18.sp
                                             ),
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = MaterialTheme.colorScheme.onSurface,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.primary,
                                             textAlign = TextAlign.Center // Centered text
                                         )
-                                        Spacer(modifier = Modifier.height(8.dp))
+                                    }
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            text = formatTime(details.intDepDate),
+                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                fontSize = 14.sp
+                                            ),
+                                            textAlign = TextAlign.Center // Centered text
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Icon(
+                                            imageVector = Icons.Default.AirplanemodeActive,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.rotate(90f)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = formatArrivalTime(
+                                                details.intArrDate,
+                                                details.intDepDate
+                                            ),
+                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                fontSize = 14.sp
+                                            ),
+                                            textAlign = TextAlign.Center // Centered text
+                                        )
+                                    }
+                                    if (isTodayDepDate(details.intDepDate) && getCheckInInfo(
+                                            details.intDepDate,
+                                            2.5,
+                                            true
+                                        ).isOpen
+                                    ) {
+                                        Spacer(modifier = Modifier.height(12.dp))
+                                        Button(
+                                            onClick = {
+                                                val workerId =
+                                                    PrefsHelper.getWorkerId(localContext)
+                                                if (workerId == null) {
+                                                    Timber.tag("FlightsScreen").e("No worker ID available for check-in")
+                                                    coroutineScope.launch {
+                                                        snackbarHostState.showSnackbar("No worker ID available.")
+                                                    }
+                                                    return@Button
+                                                }
+                                                requestLocationAndPerformAction(
+                                                    workerId = workerId,
+                                                    action = "Checked In",
+                                                    onSuccess = { lat, lng ->
+                                                        viewModel.saveLocation(
+                                                            localContext,
+                                                            lat,
+                                                            lng,
+                                                            "Checked In"
+                                                        )
+                                                        coroutineScope.launch {
+                                                            snackbarHostState.showSnackbar("You're checked in!")
+                                                        }
+                                                    },
+                                                    onFailure = { message ->
+                                                        coroutineScope.launch {
+                                                            snackbarHostState.showSnackbar(
+                                                                message
+                                                            )
+                                                        }
+                                                    }
+                                                )
+                                            },
+                                            modifier = Modifier.fillMaxWidth(0.5f),
+                                            shape = RoundedCornerShape(12.dp)
+                                        ) {
+                                            Text("Checked In")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Add padding after international leg
+                        if (!details.intFlightNo.isNullOrEmpty() && !details.intDepDate.isNullOrEmpty()) {
+                            Spacer(modifier = Modifier.height(16.dp)) // Increased padding before domestic leg
+                        }
+
+                        if (details.hotel1 != null && details.hotel1.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = details.hotel1,
+                                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+                                color = MaterialTheme.colorScheme.secondary,
+                                textAlign = TextAlign.Center // Centered text
+                            )
+                        }
+
+                        // Second Leg (Domestic)
+                        if (!details.domFlightNo.isNullOrEmpty() && !details.domDepDate.isNullOrEmpty() && !details.domDest.isNullOrEmpty()) {
+                            Spacer(modifier = Modifier.height(12.dp)) // Padding between subcards
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                ),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), // Blue-gray outline
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally // Center content
+                                ) {
+                                    Text(
+                                        text = formatSubcardTitle(details.domDepDate),
+                                        style = MaterialTheme.typography.titleLarge.copy(
+                                            fontSize = 18.sp
+                                        ),
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        textAlign = TextAlign.Center // Centered text
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    if ((details.intDepDate.isNullOrEmpty() || details.domDepDate.isNullOrEmpty() || isDifferentDay(
+                                            details.intDepDate,
+                                            details.domDepDate
+                                        )) ||
+                                        (details.intFlightNo.isNullOrEmpty() || details.domFlightNo.isNullOrEmpty() || isDifferentAirline(
+                                            details.intFlightNo,
+                                            details.domFlightNo
+                                        ))
+                                    ) {
                                         Text(
                                             text = getCheckInInfo(
-                                                details.intDepDate,
-                                                2.5,
-                                                true
+                                                details.domDepDate,
+                                                1.0,
+                                                false
                                             ).statusText,
                                             style = MaterialTheme.typography.titleLarge.copy(
                                                 fontSize = 18.sp
@@ -1355,9 +1524,9 @@ fun FlightsScreen(
                                         Spacer(modifier = Modifier.height(8.dp))
                                         Text(
                                             text = getCheckInInfo(
-                                                details.intDepDate,
-                                                2.5,
-                                                true
+                                                details.domDepDate,
+                                                1.0,
+                                                false
                                             ).countdownText ?: "",
                                             style = MaterialTheme.typography.bodyMedium.copy(
                                                 fontSize = 14.sp
@@ -1365,655 +1534,668 @@ fun FlightsScreen(
                                             color = MaterialTheme.colorScheme.onSurface,
                                             textAlign = TextAlign.Center // Centered text
                                         )
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.Center, // Center the row content
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            AsyncImage(
-                                                model = details.intFlightNo.take(2)
-                                                    .let { "https://db.nougro.com/images/airlines/$it.png" },
-                                                contentDescription = "Airline logo",
-                                                modifier = Modifier.size(48.dp),
-                                                placeholder = painterResource(id = android.R.drawable.ic_menu_gallery),
-                                                error = painterResource(id = android.R.drawable.ic_menu_close_clear_cancel)
-                                            )
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Text(
-                                                text = "${details.intFlightNo} to ${details.intDest ?: "N/A"}",
-                                                style = MaterialTheme.typography.titleLarge.copy(
-                                                    fontSize = 18.sp
-                                                ),
-                                                fontWeight = FontWeight.Bold,
-                                                color = MaterialTheme.colorScheme.primary,
-                                                textAlign = TextAlign.Center // Centered text
-                                            )
-                                        }
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.Center,
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Text(
-                                                text = formatTime(details.intDepDate),
-                                                style = MaterialTheme.typography.bodyMedium.copy(
-                                                    fontSize = 14.sp
-                                                ),
-                                                textAlign = TextAlign.Center // Centered text
-                                            )
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Icon(
-                                                imageVector = Icons.Default.AirplanemodeActive,
-                                                contentDescription = null,
-                                                tint = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.rotate(90f)
-                                            )
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Text(
-                                                text = formatArrivalTime(
-                                                    details.intArrDate,
-                                                    details.intDepDate
-                                                ),
-                                                style = MaterialTheme.typography.bodyMedium.copy(
-                                                    fontSize = 14.sp
-                                                ),
-                                                textAlign = TextAlign.Center // Centered text
-                                            )
-                                        }
-                                        if (isTodayDepDate(details.intDepDate) && getCheckInInfo(
-                                                details.intDepDate,
-                                                2.5,
-                                                true
-                                            ).isOpen
-                                        ) {
-                                            Spacer(modifier = Modifier.height(12.dp))
-                                            Button(
-                                                onClick = {
-                                                    val workerId =
-                                                        PrefsHelper.getWorkerId(localContext)
-                                                    if (workerId == null) {
-                                                        Timber.tag("FlightsScreen").e("No worker ID available for check-in")
-                                                        coroutineScope.launch {
-                                                            snackbarHostState.showSnackbar("No worker ID available.")
-                                                        }
-                                                        return@Button
-                                                    }
-                                                    requestLocationAndPerformAction(
-                                                        workerId = workerId,
-                                                        action = "Checked In",
-                                                        onSuccess = { lat, lng ->
-                                                            viewModel.saveLocation(
-                                                                localContext,
-                                                                lat,
-                                                                lng,
-                                                                "Checked In"
-                                                            )
-                                                            coroutineScope.launch {
-                                                                snackbarHostState.showSnackbar("You're checked in!")
-                                                            }
-                                                        },
-                                                        onFailure = { message ->
-                                                            coroutineScope.launch {
-                                                                snackbarHostState.showSnackbar(
-                                                                    message
-                                                                )
-                                                            }
-                                                        }
-                                                    )
-                                                },
-                                                modifier = Modifier.fillMaxWidth(0.5f),
-                                                shape = RoundedCornerShape(12.dp)
-                                            ) {
-                                                Text("Checked In")
-                                            }
-                                        }
                                     }
-                                }
-                            }
-
-                            // Add padding after international leg
-                            if (!details.intFlightNo.isNullOrEmpty() && !details.intDepDate.isNullOrEmpty()) {
-                                Spacer(modifier = Modifier.height(16.dp)) // Increased padding before domestic leg
-                            }
-
-                            if (details.hotel1 != null && details.hotel1.isNotBlank()) {
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Text(
-                                    text = details.hotel1,
-                                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-                                    color = MaterialTheme.colorScheme.secondary,
-                                    textAlign = TextAlign.Center // Centered text
-                                )
-                            }
-
-                            // Second Leg (Domestic)
-                            if (!details.domFlightNo.isNullOrEmpty() && !details.domDepDate.isNullOrEmpty() && !details.domDest.isNullOrEmpty()) {
-                                Spacer(modifier = Modifier.height(12.dp)) // Padding between subcards
-                                Card(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                                    shape = RoundedCornerShape(12.dp),
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                                    ),
-                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), // Blue-gray outline
-                                ) {
-                                    Column(
-                                        modifier = Modifier.padding(12.dp),
-                                        horizontalAlignment = Alignment.CenterHorizontally // Center content
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center, // Center the row content
+                                        modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Text(
-                                            text = formatSubcardTitle(details.domDepDate),
-                                            style = MaterialTheme.typography.titleLarge.copy(
-                                                fontSize = 18.sp
-                                            ),
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = MaterialTheme.colorScheme.onSurface,
-                                            textAlign = TextAlign.Center // Centered text
-                                        )
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        if ((details.intDepDate.isNullOrEmpty() || details.domDepDate.isNullOrEmpty() || isDifferentDay(
-                                                details.intDepDate,
-                                                details.domDepDate
-                                            )) ||
-                                            (details.intFlightNo.isNullOrEmpty() || details.domFlightNo.isNullOrEmpty() || isDifferentAirline(
-                                                details.intFlightNo,
-                                                details.domFlightNo
-                                            ))
-                                        ) {
-                                            Text(
-                                                text = getCheckInInfo(
-                                                    details.domDepDate,
-                                                    1.0,
-                                                    false
-                                                ).statusText,
-                                                style = MaterialTheme.typography.titleLarge.copy(
-                                                    fontSize = 18.sp
-                                                ),
-                                                fontWeight = FontWeight.Bold,
-                                                color = Color.Red,
-                                                textAlign = TextAlign.Center // Centered text
-                                            )
-                                            Spacer(modifier = Modifier.height(8.dp))
-                                            Text(
-                                                text = getCheckInInfo(
-                                                    details.domDepDate,
-                                                    1.0,
-                                                    false
-                                                ).countdownText ?: "",
-                                                style = MaterialTheme.typography.bodyMedium.copy(
-                                                    fontSize = 14.sp
-                                                ),
-                                                color = MaterialTheme.colorScheme.onSurface,
-                                                textAlign = TextAlign.Center // Centered text
-                                            )
-                                        }
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.Center, // Center the row content
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            AsyncImage(
-                                                model = details.domFlightNo.let { "https://db.nougro.com/images/airlines/${it.take(2)}.png" },
-                                                contentDescription = "Airline logo",
-                                                modifier = Modifier.size(48.dp),
-                                                placeholder = painterResource(id = android.R.drawable.ic_menu_gallery),
-                                                error = painterResource(id = android.R.drawable.ic_menu_close_clear_cancel)
-                                            )
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Text(
-                                                text = "${details.domFlightNo} to ${details.domDest}",
-                                                style = MaterialTheme.typography.titleLarge.copy(
-                                                    fontSize = 18.sp
-                                                ),
-                                                fontWeight = FontWeight.Bold,
-                                                color = MaterialTheme.colorScheme.primary,
-                                                textAlign = TextAlign.Center // Centered text
-                                            )
-                                        }
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.Center,
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Text(
-                                                text = formatTime(details.domDepDate),
-                                                style = MaterialTheme.typography.bodyMedium.copy(
-                                                    fontSize = 14.sp
-                                                ),
-                                                textAlign = TextAlign.Center // Centered text
-                                            )
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Icon(
-                                                imageVector = Icons.Default.AirplanemodeActive,
-                                                contentDescription = null,
-                                                tint = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.rotate(90f)
-                                            )
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Text(
-                                                text = formatArrivalTime(
-                                                    details.domArrDate,
-                                                    details.domDepDate
-                                                ),
-                                                style = MaterialTheme.typography.bodyMedium.copy(
-                                                    fontSize = 14.sp
-                                                ),
-                                                textAlign = TextAlign.Center // Centered text
-                                            )
-                                        }
-                                        if (isTodayDepDate(details.domDepDate) && getCheckInInfo(
-                                                details.domDepDate,
-                                                1.0,
-                                                false
-                                            ).isOpen
-                                        ) {
-                                            Spacer(modifier = Modifier.height(12.dp))
-                                            Button(
-                                                onClick = {
-                                                    val workerId =
-                                                        PrefsHelper.getWorkerId(localContext)
-                                                    if (workerId == null) {
-                                                        Timber.tag("FlightsScreen").e("No worker ID available for check-in")
-                                                        coroutineScope.launch {
-                                                            snackbarHostState.showSnackbar("No worker ID available.")
-                                                        }
-                                                        return@Button
-                                                    }
-                                                    requestLocationAndPerformAction(
-                                                        workerId = workerId,
-                                                        action = "Checked In",
-                                                        onSuccess = { lat, lng ->
-                                                            viewModel.saveLocation(
-                                                                localContext,
-                                                                lat,
-                                                                lng,
-                                                                "Checked In"
-                                                            )
-                                                            coroutineScope.launch {
-                                                                snackbarHostState.showSnackbar("You're checked in!")
-                                                            }
-                                                        },
-                                                        onFailure = { message ->
-                                                            coroutineScope.launch {
-                                                                snackbarHostState.showSnackbar(
-                                                                    message
-                                                                )
-                                                            }
-                                                        }
-                                                    )
-                                                },
-                                                modifier = Modifier.fillMaxWidth(0.5f),
-                                                shape = RoundedCornerShape(12.dp)
-                                            ) {
-                                                Text("Checked In")
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (details.hotel2 != null && details.hotel2.isNotBlank()) {
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Text(
-                                    text = details.hotel2,
-                                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-                                    color = MaterialTheme.colorScheme.secondary,
-                                    textAlign = TextAlign.Center // Centered text
-                                )
-                            }
-
-                            // Third Leg
-                            if (!details.dom2FlightNo.isNullOrEmpty() && !details.dom2DepDate.isNullOrEmpty() && !details.dom2Dest.isNullOrEmpty()) {
-                                Spacer(modifier = Modifier.height(12.dp)) // Padding between subcards
-                                Card(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                                    shape = RoundedCornerShape(12.dp),
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                                    ),
-                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), // Blue-gray outline
-                                ) {
-                                    Column(
-                                        modifier = Modifier.padding(12.dp),
-                                        horizontalAlignment = Alignment.CenterHorizontally // Center content
-                                    ) {
-                                        Text(
-                                            text = formatSubcardTitle(details.dom2DepDate),
-                                            style = MaterialTheme.typography.titleLarge.copy(
-                                                fontSize = 18.sp
-                                            ),
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = MaterialTheme.colorScheme.onSurface,
-                                            textAlign = TextAlign.Center // Centered text
-                                        )
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        if ((details.domDepDate.isNullOrEmpty() || details.dom2DepDate.isNullOrEmpty() || isDifferentDay(
-                                                details.domDepDate,
-                                                details.dom2DepDate
-                                            )) ||
-                                            (details.domFlightNo.isNullOrEmpty() || details.dom2FlightNo.isNullOrEmpty() || isDifferentAirline(
-                                                details.domFlightNo,
-                                                details.dom2FlightNo
-                                            ))
-                                        ) {
-                                            Text(
-                                                text = getCheckInInfo(
-                                                    details.dom2DepDate,
-                                                    1.0,
-                                                    false
-                                                ).statusText,
-                                                style = MaterialTheme.typography.titleLarge.copy(
-                                                    fontSize = 18.sp
-                                                ),
-                                                fontWeight = FontWeight.Bold,
-                                                color = Color.Red,
-                                                textAlign = TextAlign.Center // Centered text
-                                            )
-                                            Spacer(modifier = Modifier.height(8.dp))
-                                            Text(
-                                                text = getCheckInInfo(
-                                                    details.dom2DepDate,
-                                                    1.0,
-                                                    false
-                                                ).countdownText ?: "",
-                                                style = MaterialTheme.typography.bodyMedium.copy(
-                                                    fontSize = 14.sp
-                                                ),
-                                                color = MaterialTheme.colorScheme.onSurface,
-                                                textAlign = TextAlign.Center // Centered text
-                                            )
-                                        }
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.Center, // Center the row content
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            AsyncImage(
-                                                model = details.dom2FlightNo.let { "https://db.nougro.com/images/airlines/${it.take(2)}.png" },
-                                                contentDescription = "Airline logo",
-                                                modifier = Modifier.size(48.dp),
-                                                placeholder = painterResource(id = android.R.drawable.ic_menu_gallery),
-                                                error = painterResource(id = android.R.drawable.ic_menu_close_clear_cancel)
-                                            )
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Text(
-                                                text = "${details.dom2FlightNo} to ${details.dom2Dest}",
-                                                style = MaterialTheme.typography.titleLarge.copy(
-                                                    fontSize = 18.sp
-                                                ),
-                                                fontWeight = FontWeight.Bold,
-                                                color = MaterialTheme.colorScheme.primary,
-                                                textAlign = TextAlign.Center // Centered text
-                                            )
-                                        }
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.Center,
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Text(
-                                                text = formatTime(details.dom2DepDate),
-                                                style = MaterialTheme.typography.bodyMedium.copy(
-                                                    fontSize = 14.sp
-                                                ),
-                                                textAlign = TextAlign.Center // Centered text
-                                            )
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Icon(
-                                                imageVector = Icons.Default.AirplanemodeActive,
-                                                contentDescription = null,
-                                                tint = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.rotate(90f)
-                                            )
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Text(
-                                                text = formatArrivalTime(
-                                                    details.dom2ArrDate,
-                                                    details.dom2DepDate
-                                                ),
-                                                style = MaterialTheme.typography.bodyMedium.copy(
-                                                    fontSize = 14.sp
-                                                ),
-                                                textAlign = TextAlign.Center // Centered text
-                                            )
-                                        }
-                                        if (isTodayDepDate(details.dom2DepDate) && getCheckInInfo(
-                                                details.dom2DepDate,
-                                                1.0,
-                                                false
-                                            ).isOpen
-                                        ) {
-                                            Spacer(modifier = Modifier.height(12.dp))
-                                            Button(
-                                                onClick = {
-                                                    val workerId =
-                                                        PrefsHelper.getWorkerId(localContext)
-                                                    if (workerId == null) {
-                                                        Timber.tag("FlightsScreen").e("No worker ID available for check-in")
-                                                        coroutineScope.launch {
-                                                            snackbarHostState.showSnackbar("No worker ID available.")
-                                                        }
-                                                        return@Button
-                                                    }
-                                                    requestLocationAndPerformAction(
-                                                        workerId = workerId,
-                                                        action = "Checked In",
-                                                        onSuccess = { lat, lng ->
-                                                            viewModel.saveLocation(
-                                                                localContext,
-                                                                lat,
-                                                                lng,
-                                                                "Checked In"
-                                                            )
-                                                            coroutineScope.launch {
-                                                                snackbarHostState.showSnackbar("You're checked in!")
-                                                            }
-                                                        },
-                                                        onFailure = { message ->
-                                                            coroutineScope.launch {
-                                                                snackbarHostState.showSnackbar(
-                                                                    message
-                                                                )
-                                                            }
-                                                        }
-                                                    )
-                                                },
-                                                modifier = Modifier.fillMaxWidth(0.5f),
-                                                shape = RoundedCornerShape(12.dp)
-                                            ) {
-                                                Text("Checked In")
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            if (details.flightStatus == "Unaware" || details.flightStatus == "Messaged") {
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.Center
-                                ) {
-                                    Button(
-                                        onClick = {
-                                            val workerId = PrefsHelper.getWorkerId(localContext)
-                                            if (workerId == null) {
-                                                Timber.tag("FlightsScreen").e("No worker ID available for flight status update")
-                                                coroutineScope.launch {
-                                                    snackbarHostState.showSnackbar("No worker ID available.")
-                                                }
-                                                return@Button
-                                            }
-                                            viewModel.updateFlightStatus(localContext) { success, message ->
-                                                coroutineScope.launch {
-                                                    if (success) {
-                                                        snackbarHostState.showSnackbar("Flight confirmed! Ready to go!")
-                                                    } else {
-                                                        snackbarHostState.showSnackbar("Something went wrong. Try again")
-                                                    }
-                                                }
-                                            }
-                                        },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        shape = RoundedCornerShape(12.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Check,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.onPrimary
+                                        AsyncImage(
+                                            model = details.domFlightNo.let { "https://db.nougro.com/images/airlines/${it.take(2)}.png" },
+                                            contentDescription = "Airline logo",
+                                            modifier = Modifier.size(48.dp),
+                                            placeholder = painterResource(id = android.R.drawable.ic_menu_gallery),
+                                            error = painterResource(id = android.R.drawable.ic_menu_close_clear_cancel)
                                         )
                                         Spacer(modifier = Modifier.width(8.dp))
-                                        Text("Tankyu tumas!  Mi save nao.")
+                                        Text(
+                                            text = "${details.domFlightNo} to ${details.domDest}",
+                                            style = MaterialTheme.typography.titleLarge.copy(
+                                                fontSize = 18.sp
+                                            ),
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            textAlign = TextAlign.Center // Centered text
+                                        )
                                     }
-                                }
-                            }
-
-                            if (!details.intFlightNo.isNullOrEmpty() && !details.intDepDate.isNullOrEmpty() ||
-                                !details.domFlightNo.isNullOrEmpty() && !details.domDepDate.isNullOrEmpty() ||
-                                !details.dom2FlightNo.isNullOrEmpty() && !details.dom2DepDate.isNullOrEmpty()
-                            ) {
-                                Spacer(modifier = Modifier.height(12.dp)) // Padding before divider
-                                HorizontalDivider(
-                                    thickness = 1.dp,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
-                                )
-                                Spacer(modifier = Modifier.height(12.dp)) // Padding after divider
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.End
-                                ) {
-                                    Button(
-                                        onClick = {
-                                            val workerId = PrefsHelper.getWorkerId(localContext)
-                                            if (workerId == null) {
-                                                Timber.tag("FlightsScreen").e("No worker ID available for travel location")
-                                                coroutineScope.launch {
-                                                    snackbarHostState.showSnackbar("No worker ID available.")
-                                                }
-                                                return@Button
-                                            }
-                                            requestLocationAndPerformAction(
-                                                workerId = workerId,
-                                                action = "Travel Location",
-                                                onSuccess = { lat, lng ->
-                                                    viewModel.saveLocation(
-                                                        localContext,
-                                                        lat,
-                                                        lng,
-                                                        "Travel Location"
-                                                    )
-                                                    coroutineScope.launch {
-                                                        snackbarHostState.showSnackbar("Your location is saved!")
-                                                    }
-                                                },
-                                                onFailure = { message ->
-                                                    coroutineScope.launch {
-                                                        snackbarHostState.showSnackbar(message)
-                                                    }
-                                                }
-                                            )
-                                        },
-                                        modifier = Modifier.weight(1f),
-                                        shape = RoundedCornerShape(12.dp)
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center,
+                                        modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Text("Mi Stap lo Ples ia!")
+                                        Text(
+                                            text = formatTime(details.domDepDate),
+                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                fontSize = 14.sp
+                                            ),
+                                            textAlign = TextAlign.Center // Centered text
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Icon(
+                                            imageVector = Icons.Default.AirplanemodeActive,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.rotate(90f)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = formatArrivalTime(
+                                                details.domArrDate,
+                                                details.domDepDate
+                                            ),
+                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                fontSize = 14.sp
+                                            ),
+                                            textAlign = TextAlign.Center // Centered text
+                                        )
+                                    }
+                                    if (isTodayDepDate(details.domDepDate) && getCheckInInfo(
+                                            details.domDepDate,
+                                            1.0,
+                                            false
+                                        ).isOpen
+                                    ) {
+                                        Spacer(modifier = Modifier.height(12.dp))
+                                        Button(
+                                            onClick = {
+                                                val workerId =
+                                                    PrefsHelper.getWorkerId(localContext)
+                                                if (workerId == null) {
+                                                    Timber.tag("FlightsScreen").e("No worker ID available for check-in")
+                                                    coroutineScope.launch {
+                                                        snackbarHostState.showSnackbar("No worker ID available.")
+                                                    }
+                                                    return@Button
+                                                }
+                                                requestLocationAndPerformAction(
+                                                    workerId = workerId,
+                                                    action = "Checked In",
+                                                    onSuccess = { lat, lng ->
+                                                        viewModel.saveLocation(
+                                                            localContext,
+                                                            lat,
+                                                            lng,
+                                                            "Checked In"
+                                                        )
+                                                        coroutineScope.launch {
+                                                            snackbarHostState.showSnackbar("You're checked in!")
+                                                        }
+                                                    },
+                                                    onFailure = { message ->
+                                                        coroutineScope.launch {
+                                                            snackbarHostState.showSnackbar(
+                                                                message
+                                                            )
+                                                        }
+                                                    }
+                                                )
+                                            },
+                                            modifier = Modifier.fillMaxWidth(0.5f),
+                                            shape = RoundedCornerShape(12.dp)
+                                        ) {
+                                            Text("Checked In")
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
-                } ?: run {
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surface,
-                            contentColor = MaterialTheme.colorScheme.onSurface
-                        )
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(16.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.AirplanemodeActive,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(40.dp)
-                            )
+
+                        if (details.hotel2 != null && details.hotel2.isNotBlank()) {
                             Spacer(modifier = Modifier.height(12.dp))
                             Text(
-                                text = flightError ?: "No flight details available yet",
-                                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
-                                color = MaterialTheme.colorScheme.error,
-                                textAlign = TextAlign.Center
+                                text = details.hotel2,
+                                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+                                color = MaterialTheme.colorScheme.secondary,
+                                textAlign = TextAlign.Center // Centered text
                             )
-                            if (flightError != null) {
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Text(
-                                    text = "Check back later.",
-                                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                                    textAlign = TextAlign.Center
-                                )
-                                Spacer(modifier = Modifier.height(12.dp))
+                        }
+
+                        // Third Leg
+                        if (!details.dom2FlightNo.isNullOrEmpty() && !details.dom2DepDate.isNullOrEmpty() && !details.dom2Dest.isNullOrEmpty()) {
+                            Spacer(modifier = Modifier.height(12.dp)) // Padding between subcards
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                ),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), // Blue-gray outline
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally // Center content
+                                ) {
+                                    Text(
+                                        text = formatSubcardTitle(details.dom2DepDate),
+                                        style = MaterialTheme.typography.titleLarge.copy(
+                                            fontSize = 18.sp
+                                        ),
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        textAlign = TextAlign.Center // Centered text
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    if ((details.domDepDate.isNullOrEmpty() || details.dom2DepDate.isNullOrEmpty() || isDifferentDay(
+                                            details.domDepDate,
+                                            details.dom2DepDate
+                                        )) ||
+                                        (details.domFlightNo.isNullOrEmpty() || details.dom2FlightNo.isNullOrEmpty() || isDifferentAirline(
+                                            details.domFlightNo,
+                                            details.dom2FlightNo
+                                        ))
+                                    ) {
+                                        Text(
+                                            text = getCheckInInfo(
+                                                details.dom2DepDate,
+                                                1.0,
+                                                false
+                                            ).statusText,
+                                            style = MaterialTheme.typography.titleLarge.copy(
+                                                fontSize = 18.sp
+                                            ),
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.Red,
+                                            textAlign = TextAlign.Center // Centered text
+                                        )
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            text = getCheckInInfo(
+                                                details.dom2DepDate,
+                                                1.0,
+                                                false
+                                            ).countdownText ?: "",
+                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                fontSize = 14.sp
+                                            ),
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            textAlign = TextAlign.Center // Centered text
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center, // Center the row content
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        AsyncImage(
+                                            model = details.dom2FlightNo.let { "https://db.nougro.com/images/airlines/${it.take(2)}.png" },
+                                            contentDescription = "Airline logo",
+                                            modifier = Modifier.size(48.dp),
+                                            placeholder = painterResource(id = android.R.drawable.ic_menu_gallery),
+                                            error = painterResource(id = android.R.drawable.ic_menu_close_clear_cancel)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "${details.dom2FlightNo} to ${details.dom2Dest}",
+                                            style = MaterialTheme.typography.titleLarge.copy(
+                                                fontSize = 18.sp
+                                            ),
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            textAlign = TextAlign.Center // Centered text
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            text = formatTime(details.dom2DepDate),
+                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                fontSize = 14.sp
+                                            ),
+                                            textAlign = TextAlign.Center // Centered text
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Icon(
+                                            imageVector = Icons.Default.AirplanemodeActive,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.rotate(90f)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = formatArrivalTime(
+                                                details.dom2ArrDate,
+                                                details.dom2DepDate
+                                            ),
+                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                fontSize = 14.sp
+                                            ),
+                                            textAlign = TextAlign.Center // Centered text
+                                        )
+                                    }
+                                    if (isTodayDepDate(details.dom2DepDate) && getCheckInInfo(
+                                            details.dom2DepDate,
+                                            1.0,
+                                            false
+                                        ).isOpen
+                                    ) {
+                                        Spacer(modifier = Modifier.height(12.dp))
+                                        Button(
+                                            onClick = {
+                                                val workerId =
+                                                    PrefsHelper.getWorkerId(localContext)
+                                                if (workerId == null) {
+                                                    Timber.tag("FlightsScreen").e("No worker ID available for check-in")
+                                                    coroutineScope.launch {
+                                                        snackbarHostState.showSnackbar("No worker ID available.")
+                                                    }
+                                                    return@Button
+                                                }
+                                                requestLocationAndPerformAction(
+                                                    workerId = workerId,
+                                                    action = "Checked In",
+                                                    onSuccess = { lat, lng ->
+                                                        viewModel.saveLocation(
+                                                            localContext,
+                                                            lat,
+                                                            lng,
+                                                            "Checked In"
+                                                        )
+                                                        coroutineScope.launch {
+                                                            snackbarHostState.showSnackbar("You're checked in!")
+                                                        }
+                                                    },
+                                                    onFailure = { message ->
+                                                        coroutineScope.launch {
+                                                            snackbarHostState.showSnackbar(
+                                                                message
+                                                            )
+                                                        }
+                                                    }
+                                                )
+                                            },
+                                            modifier = Modifier.fillMaxWidth(0.5f),
+                                            shape = RoundedCornerShape(12.dp)
+                                        ) {
+                                            Text("Checked In")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (details.flightStatus == "Unaware" || details.flightStatus == "Messaged") {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.Center
+                            ) {
                                 Button(
                                     onClick = {
                                         val workerId = PrefsHelper.getWorkerId(localContext)
-                                        if (workerId != null && token != null && isNetworkAvailable.value && isScreenActive.value) {
-                                            viewModel.fetchFlightDetails(localContext) { error ->
-                                                if (error != null) {
-                                                    Timber.tag("FlightsScreen").e(error, "Retry flight fetch error")
-                                                    if (System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
-                                                        coroutineScope.launch {
-                                                            snackbarHostState.showSnackbar("Check your internet and try again")
-                                                            lastNetworkErrorShown =
-                                                                System.currentTimeMillis()
-                                                        }
-                                                    }
-                                                }
+                                        if (workerId == null) {
+                                            Timber.tag("FlightsScreen").e("No worker ID available for flight status update")
+                                            coroutineScope.launch {
+                                                snackbarHostState.showSnackbar("No worker ID available.")
                                             }
-                                        } else {
-                                            Timber.tag("FlightsScreen").e("No worker ID, token, network, or screen inactive for retry")
-                                            if (!isNetworkAvailable.value && System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
-                                                coroutineScope.launch {
-                                                    snackbarHostState.showSnackbar("Check your internet and try again")
-                                                    lastNetworkErrorShown =
-                                                        System.currentTimeMillis()
-                                                }
-                                            } else if (token == null) {
-                                                navController.navigate("login") {
-                                                    popUpTo(navController.graph.startDestinationId) {
-                                                        inclusive = true
-                                                    }
-                                                    launchSingleTop = true
+                                            return@Button
+                                        }
+                                        viewModel.updateFlightStatus(localContext) { success, message ->
+                                            coroutineScope.launch {
+                                                if (success) {
+                                                    snackbarHostState.showSnackbar("Flight confirmed! Ready to go!")
+                                                } else {
+                                                    snackbarHostState.showSnackbar("Something went wrong. Try again")
                                                 }
                                             }
                                         }
                                     },
-                                    modifier = Modifier.fillMaxWidth(0.5f),
+                                    modifier = Modifier.fillMaxWidth(),
                                     shape = RoundedCornerShape(12.dp)
                                 ) {
-                                    Text("Try Again")
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onPrimary
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Tankyu tumas!  Mi save nao.")
+                                }
+                            }
+                        }
+
+                        if (!details.intFlightNo.isNullOrEmpty() && !details.intDepDate.isNullOrEmpty() ||
+                            !details.domFlightNo.isNullOrEmpty() && !details.domDepDate.isNullOrEmpty() ||
+                            !details.dom2FlightNo.isNullOrEmpty() && !details.dom2DepDate.isNullOrEmpty()
+                        ) {
+                            Spacer(modifier = Modifier.height(12.dp)) // Padding before divider
+                            HorizontalDivider(
+                                thickness = 1.dp,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
+                            )
+                            Spacer(modifier = Modifier.height(12.dp)) // Padding after divider
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                Button(
+                                    onClick = {
+                                        val workerId = PrefsHelper.getWorkerId(localContext)
+                                        if (workerId == null) {
+                                            Timber.tag("FlightsScreen").e("No worker ID available for travel location")
+                                            coroutineScope.launch {
+                                                snackbarHostState.showSnackbar("No worker ID available.")
+                                            }
+                                            return@Button
+                                        }
+                                        requestLocationAndPerformAction(
+                                            workerId = workerId,
+                                            action = "Travel Location",
+                                            onSuccess = { lat, lng ->
+                                                viewModel.saveLocation(
+                                                    localContext,
+                                                    lat,
+                                                    lng,
+                                                    "Travel Location"
+                                                )
+                                                coroutineScope.launch {
+                                                    snackbarHostState.showSnackbar("Your location is saved!")
+                                                }
+                                            },
+                                            onFailure = { message ->
+                                                coroutineScope.launch {
+                                                    snackbarHostState.showSnackbar(message)
+                                                }
+                                            }
+                                        )
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text("Mi Stap lo Ples ia!")
                                 }
                             }
                         }
                     }
                 }
-                Spacer(modifier = Modifier.height(16.dp))
+            } ?: run {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.onSurface
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AirplanemodeActive,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(40.dp)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = flightError ?: "No departure flight details available yet",
+                            style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
+                            color = MaterialTheme.colorScheme.error,
+                            textAlign = TextAlign.Center
+                        )
+                        if (flightError != null) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = "Check back later.",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Button(
+                                onClick = {
+                                    val workerId = PrefsHelper.getWorkerId(localContext)
+                                    if (workerId != null && token != null && isNetworkAvailable.value && isScreenActive.value) {
+                                        viewModel.fetchFlightDetails(localContext) { error ->
+                                            if (error != null) {
+                                                Timber.tag("FlightsScreen").e(error, "Retry flight fetch error")
+                                                if (System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
+                                                    coroutineScope.launch {
+                                                        snackbarHostState.showSnackbar("Check your internet and try again")
+                                                        lastNetworkErrorShown =
+                                                            System.currentTimeMillis()
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        Timber.tag("FlightsScreen").e("No worker ID, token, network, or screen inactive for retry")
+                                        if (!isNetworkAvailable.value && System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
+                                            coroutineScope.launch {
+                                                snackbarHostState.showSnackbar("Check your internet and try again")
+                                                lastNetworkErrorShown =
+                                                    System.currentTimeMillis()
+                                            }
+                                        } else if (token == null) {
+                                            navController.navigate("login") {
+                                                popUpTo(navController.graph.startDestinationId) {
+                                                    inclusive = true
+                                                }
+                                                launchSingleTop = true
+                                            }
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(0.5f),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text("Try Again")
+                            }
+                        }
+                    }
+                }
             }
+
+            // Return Flight Details Card
+            inboundFlightDetails?.let { details ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.onSurface
+                    ),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), // Blue-gray outline
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .padding(16.dp)
+                            .fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AirplanemodeActive,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .rotate(270f) // Rotate to indicate return
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Return Flight Details",
+                                style = MaterialTheme.typography.titleLarge.copy(fontSize = 20.sp),
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        HorizontalDivider(
+                            thickness = 1.dp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Return Flight Leg
+                        if (!details.flightNo.isNullOrEmpty() && !details.arrivalDate.isNullOrEmpty()) {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                ),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), // Blue-gray outline
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text(
+                                        text = "Arrival on ${formatSubcardTitle(details.arrivalDate)}",
+                                        style = MaterialTheme.typography.titleLarge.copy(
+                                            fontSize = 18.sp
+                                        ),
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        textAlign = TextAlign.Center // Centered text
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center, // Center the row content
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        AsyncImage(
+                                            model = details.flight?.take(2)?.let { "https://db.nougro.com/images/airlines/$it.png" } ?: "https://db.nougro.com/images/airlines/default.png",
+                                            contentDescription = "Airline logo",
+                                            modifier = Modifier.size(48.dp),
+                                            placeholder = painterResource(id = android.R.drawable.ic_menu_gallery),
+                                            error = painterResource(id = android.R.drawable.ic_menu_close_clear_cancel)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "${details.flight} from ${details.flightFrom ?: "N/A"}",
+                                            style = MaterialTheme.typography.titleLarge.copy(
+                                                fontSize = 18.sp
+                                            ),
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            textAlign = TextAlign.Center // Centered text
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            text = "Arrival at ${formatTime(details.arrivalDate)}",
+                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                fontSize = 14.sp
+                                            ),
+                                            textAlign = TextAlign.Center // Centered text
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } ?: run {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.onSurface
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AirplanemodeActive,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .size(40.dp)
+                                .rotate(270f)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = inboundError ?: "No return flight details available yet",
+                            style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
+                            color = MaterialTheme.colorScheme.error,
+                            textAlign = TextAlign.Center
+                        )
+                        if (inboundError != null) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = "Check back later.",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Button(
+                                onClick = {
+                                    val workerId = PrefsHelper.getWorkerId(localContext)
+                                    if (workerId != null && token != null && isNetworkAvailable.value && isScreenActive.value) {
+                                        viewModel.fetchInboundFlightDetails(localContext) { error ->
+                                            if (error != null) {
+                                                Timber.tag("FlightsScreen").e(error, "Retry inbound flight fetch error")
+                                                if (System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
+                                                    coroutineScope.launch {
+                                                        snackbarHostState.showSnackbar("Check your internet and try again")
+                                                        lastNetworkErrorShown =
+                                                            System.currentTimeMillis()
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        Timber.tag("FlightsScreen").e("No worker ID, token, network, or screen inactive for retry")
+                                        if (!isNetworkAvailable.value && System.currentTimeMillis() - lastNetworkErrorShown > 5000) {
+                                            coroutineScope.launch {
+                                                snackbarHostState.showSnackbar("Check your internet and try again")
+                                                lastNetworkErrorShown =
+                                                    System.currentTimeMillis()
+                                            }
+                                        } else if (token == null) {
+                                            navController.navigate("login") {
+                                                popUpTo(navController.graph.startDestinationId) {
+                                                    inclusive = true
+                                                }
+                                                launchSingleTop = true
+                                            }
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(0.5f),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text("Try Again")
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
         }
     }
 }
