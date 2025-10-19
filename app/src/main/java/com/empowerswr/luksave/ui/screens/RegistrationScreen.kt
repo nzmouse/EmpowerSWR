@@ -82,14 +82,14 @@ fun RegistrationScreen(
             passportError = "Passport number is required"
             isValid = false
         } else if (!trimmedPassport.matches(Regex("^[A-Z]{2}\\d{6,7}$"))) {
-            passportError = "Passport format: e.g., RV0123456"
+            passportError = "Passport format: e.g., RV0127280"
             isValid = false
         }
 
         // Surname validation
         val trimmedSurname = surname.trim().uppercase()
         if (trimmedSurname.isEmpty()) {
-            surnameError = "Surname is required (Exactly as on passport)"
+            surnameError = "Surname is required"
             isValid = false
         }
 
@@ -296,7 +296,7 @@ fun RegistrationScreen(
             OutlinedTextField(
                 value = surname,
                 onValueChange = { surname = it.trim().uppercase() },
-                label = { Text("Surname in Passport") },
+                label = { Text("Surname") },
                 isError = surnameError != null,
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
