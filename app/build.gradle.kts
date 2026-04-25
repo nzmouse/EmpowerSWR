@@ -110,6 +110,7 @@ dependencies {
     implementation(libs.mlkit.document.scanner)
     implementation(libs.play.services.location)
     implementation(libs.signature.pad)
+    implementation(libs.play.services.maps)
     debugImplementation(libs.androidx.compose.ui.tooling)
     implementation(libs.coil.compose)
     implementation(libs.s3) {

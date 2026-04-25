@@ -1,8 +1,10 @@
 package com.empowerswr.luksave.ui.screens
 
 import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
@@ -25,8 +27,12 @@ import java.util.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import timber.log.Timber
+
 
 fun formatDate(dateString: String?): String {
     if (dateString.isNullOrEmpty()) return "N/A"
@@ -41,8 +47,10 @@ fun formatDate(dateString: String?): String {
     }
 }
 
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+
 fun WorkerDetailsScreen(
     viewModel: EmpowerViewModel,
     context: Context,
@@ -64,6 +72,9 @@ fun WorkerDetailsScreen(
     val pendingFields by viewModel.pendingFields
     val localContext = LocalContext.current
     var isRefreshing by remember { mutableStateOf(false) }
+    var nidExpInput by remember { mutableStateOf("") }
+    var isSavingNIDExp by remember { mutableStateOf(false) }
+
     LaunchedEffect(token) {
         if (token == null) {
             navController.navigate("login") {
@@ -170,7 +181,35 @@ fun WorkerDetailsScreen(
             }
         }
     }
+    // Save NID Expiry Date - must be inside the composable
+    fun saveNIDExpiry() {
+        if (!nidExpInput.matches(Regex("^\\d{4}-\\d{2}-\\d{2}$"))) {
+            Toast.makeText(context, "Plis yusum format YYYY-MM-DD", Toast.LENGTH_SHORT).show()
+            return
+        }
 
+        isSavingNIDExp = true
+
+        coroutineScope.launch {
+            val workerId = PrefsHelper.getWorkerId(context)
+            if (workerId.isNullOrEmpty()) {
+                Toast.makeText(context, "Session expired", Toast.LENGTH_LONG).show()
+                isSavingNIDExp = false
+                return@launch
+            }
+
+            viewModel.updateNIDExpiry(workerId, nidExpInput) { success, message ->
+                isSavingNIDExp = false
+                if (success) {
+                    Toast.makeText(context, "NID Expiry i save finis", Toast.LENGTH_LONG).show()
+                    viewModel.fetchWorkerDetails(context) { }   // refresh screen
+                    nidExpInput = ""
+                } else {
+                    Toast.makeText(context, message ?: "Failed to save expiry date", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
@@ -439,6 +478,115 @@ fun WorkerDetailsScreen(
                             } else {
                                 Text(
                                     text = "No Licence",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
+                    // ==================== NATIONAL ID CARD WITH EXPIRY ====================
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp)
+                        ) {
+                            Text(
+                                text = "National ID Card",
+                                style = MaterialTheme.typography.titleLarge,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            if (!worker.nid.isNullOrEmpty()) {
+                                Text(
+                                    text = "National ID Number: ${worker.nid}",
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                val expiryDate = worker.NIDExp ?: "0000-00-00"
+
+                                if (expiryDate == "0000-00-00" || expiryDate.isEmpty()) {
+                                    // Expiry NOT SET
+                                    Text(
+                                        text = "National ID Expiry Date: NOT SET",
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = MaterialTheme.colorScheme.error,
+                                        fontWeight = FontWeight.Bold
+                                    )
+
+                                    Spacer(modifier = Modifier.height(12.dp))
+
+                                    Text(
+                                        text = "Plis putum expiry date blong National ID kad blong yu",
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+
+                                    Spacer(modifier = Modifier.height(12.dp))
+
+                                    OutlinedTextField(
+                                        value = nidExpInput,
+                                        onValueChange = { newValue ->
+                                            if (newValue.matches(Regex("^\\d{0,4}(-\\d{0,2})?(-\\d{0,2})?$"))) {
+                                                nidExpInput = newValue
+                                            }
+                                        },
+                                        label = { Text("Expiry Date (YYYY-MM-DD)") },
+                                        placeholder = { Text("yyyy-mm-dd") },
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+
+                                    Spacer(modifier = Modifier.height(12.dp))
+
+                                    Button(
+                                        onClick = { saveNIDExpiry() },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        enabled = nidExpInput.matches(Regex("^\\d{4}-\\d{2}-\\d{2}$")) && !isSavingNIDExp
+                                    ) {
+                                        if (isSavingNIDExp) {
+                                            CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                                        } else {
+                                            Text("Save Expiry Date")
+                                        }
+                                    }
+                                } else {
+                                    // Expiry exists - check if expired
+                                    val isExpired = try {
+                                        val today = java.time.LocalDate.now()
+                                        val expDate = java.time.LocalDate.parse(expiryDate)
+                                        expDate.isBefore(today)
+                                    } catch (e: Exception) {
+                                        false
+                                    }
+
+                                    Text(
+                                        text = "Expiry Date: ${formatDate(expiryDate)}",
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = if (isExpired) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                                        fontWeight = if (isExpired) FontWeight.Bold else FontWeight.Normal
+                                    )
+
+                                    if (isExpired) {
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            text = "⚠️ National ID blong yu i expaia finis!\nPlis renewim kwiktaem.",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.error,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            } else {
+                                Text(
+                                    text = "No National ID Card Recorded",
                                     style = MaterialTheme.typography.bodyLarge,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )

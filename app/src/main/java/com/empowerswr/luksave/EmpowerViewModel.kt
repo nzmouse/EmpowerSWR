@@ -2,12 +2,13 @@ package com.empowerswr.luksave
 
 import android.app.Application
 import android.content.Context
+import android.util.Log
+import android.widget.Toast
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.LiveData
-import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
+import com.google.android.gms.maps.model.LatLng
 import com.google.gson.JsonParseException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -15,18 +16,24 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import com.empowerswr.luksave.EmpowerApi
-import com.empowerswr.luksave.PdbUpdateResponse
 import org.json.JSONObject
 import retrofit2.HttpException
 import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
-import retrofit2.http.*
 import timber.log.Timber
 import java.net.UnknownHostException
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
+import java.time.LocalDate
+import java.time.ZoneId
+import kotlin.math.*
+import android.Manifest
+import android.content.pm.PackageManager
+import android.location.Location
+import androidx.core.content.ContextCompat
+import com.google.android.gms.location.LocationServices
+import kotlinx.coroutines.tasks.await
 
 class EmpowerViewModel(application: Application) : AndroidViewModel(application) {
     private val _token = mutableStateOf<String?>(null)
@@ -266,7 +273,7 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         _notifications.value = _notifications.value.toMutableList().apply { remove(notification) }
     }
 
-    fun fetchWorkerDetails(context: Context, onError: ((Throwable?) -> Unit)? = null) {
+    fun fetchWorkerDetails(context: Context?, onError: ((Throwable?) -> Unit)? = null) {
         viewModelScope.launch(Dispatchers.IO) {
             val workerId = PrefsHelper.getWorkerId(context) ?: run {
                 Timber.e("No workerId available for fetching worker details")
@@ -422,7 +429,7 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         _checkInError.value = null
     }
 
-    fun logout(context: Context) {
+    fun logout(context: Context?) {
         _token.value = null
         _loginError.value = null
         _workerDetails.value = null
@@ -1027,5 +1034,424 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         _showUsernamePrompt.value = false
         Timber.d("ResetUsernamePrompt: Cleared showUsernamePrompt")
     }
+    fun markMedicalDone(context: Context) {
+        val workerId = PrefsHelper.getWorkerId(context) ?: run {
+            Timber.e("markMedicalDone: No workerId found")
+            return
+        }
+
+        // Vanuatu local date (Pacific/Efate timezone)
+        val vanuatuZone = ZoneId.of("Pacific/Efate")
+        val todayVanuatu = LocalDate.now(vanuatuZone).toString()
+
+        viewModelScope.launch {
+            try {
+                val response = api.updateMedical(
+                    workerId = workerId,
+                    medicalDate = todayVanuatu,      // sends to ?medical=2026-04-04
+                    emedStatus = "App-Clinic"          // sends to ?emed=App-Clinic
+                )
+
+                if (response.isSuccessful) {
+                    Timber.d("Medical update successful")
+                    // Refresh the HomeScreen data
+                    fetchWorkerDetails(context) { error ->
+                        error?.let { Timber.w("Refresh after medical update failed: $it") }
+                    }
+                } else {
+                    Timber.e("Medical update failed with code: ${response.code()}")
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "Exception during medical update call")
+            }
+        }
+    }
+    fun acknowledgeGoingToMedical(context: Context, workerId: String) {
+        if (workerId.isBlank()) {
+            Toast.makeText(context, "Worker ID missing", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        viewModelScope.launch {
+            try {
+                Log.d("MEDICAL_UPDATE", "=== ACKNOWLEDGE START === workerId: $workerId")
+
+                val response = api.updateMedical(
+                    workerId = workerId,
+                    medicalDate = "",
+                    emedStatus = "App-Going"
+                )
+
+                Log.d("MEDICAL_UPDATE", "Response code: ${response.code()}")
+                Log.d("MEDICAL_UPDATE", "isSuccessful: ${response.isSuccessful}")
+
+                if (response.isSuccessful) {
+                    val body = response.body()
+                    Log.d("MEDICAL_UPDATE", "Success body: $body")
+                    fetchWorkerDetails(context) { error ->
+                        error?.let { Timber.w("Refresh after medical update failed: $it") }
+                    }
+                    Toast.makeText(context, "Status updated to App-Going", Toast.LENGTH_SHORT).show()
+                } else {
+                    val errorBody = response.errorBody()?.string() ?: "No error body"
+                    Log.e("MEDICAL_UPDATE", "ERROR ${response.code()}: $errorBody")
+                    Toast.makeText(context, "Update failed: ${response.code()} - ${errorBody.take(100)}", Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                Log.e("MEDICAL_UPDATE", "Exception during acknowledge", e)
+                Toast.makeText(context, "Connection error: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+    // ====================== NID & RESET FUNCTIONS ======================
+
+    // Save / Update National ID (called from HomeScreen NID card)
+    fun updateWorkerNID(nid: String, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val workerId = PrefsHelper.getWorkerId(getApplication<Application>().applicationContext)
+                if (workerId.isNullOrEmpty()) {
+                    onResult(false, "Session i expaea. Plis traem login bakegen.")
+                    return@launch
+                }
+
+                // Call exactly like your other query-based endpoints
+                val response = api.saveNID(workerId, nid)
+
+                if (response.success) {
+                    fetchWorkerDetails(getApplication<Application>().applicationContext) { error ->
+                        error?.let { Timber.e(it, "Refresh after NID save failed") }
+                    }
+                    onResult(true, response.message ?: "National ID i savem finis")
+                } else {
+                    onResult(false, response.message ?: "Mi no save sevem National ID")
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "updateWorkerNID failed")
+                onResult(false, "Netwok error. Plis jekem koneksen.")
+            }
+        }
+    }
+    // Update NID + Mother's name (secret answer) - called from HomeScreen card
+    fun updateWorkerNIDAndSecret(
+        workerId: String,
+        nid: String,
+        motherName: String,
+        onResult: (Boolean, String) -> Unit
+    ) {
+        viewModelScope.launch {
+            try {
+                val response = api.saveNIDAndSecret(
+                    workerId = workerId,
+                    nid = nid,
+                    secretAnswer = motherName.trim()     // send the plain text
+                )
+
+                if (response.success) {
+                    fetchWorkerDetails(getApplication<Application>().applicationContext) { error ->
+                        error?.let { Timber.e(it, "Refresh after save failed") }
+                    }
+                    onResult(true, response.message ?: "National ID mo nem blong mama i save finis")
+                } else {
+                    onResult(false, response.message ?: "Failed to save")
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "updateWorkerNIDAndSecret failed")
+                onResult(false, "Network error. Please check your connection.")
+            }
+        }
+    }
+    // Verify Passport or NID for reset
+    fun verifyForReset(type: String, value: String, answer: String, onResult: (Boolean, Int?, String?) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val response = api.verifyForReset(type, value, answer)
+
+                if (response.success && response.worker_id != null) {
+                    onResult(true, response.worker_id, response.username)
+                } else {
+                    onResult(false, null, null)
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "verifyForReset failed")
+                onResult(false, null, null)
+            }
+        }
+    }
+
+    // Reset PIN
+    fun resetPin(workerId: Int, newPin: String, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val response = api.resetPin(workerId.toString(), newPin)   // <-- direct parameters
+
+                onResult(
+                    response.success,
+                    response.message ?: if (response.success) "PIN i reset finis" else "Failed to reset PIN"
+                )
+            } catch (e: Exception) {
+                Timber.e(e, "resetPin failed")
+                onResult(false, "Network error. Please try again.")
+            }
+        }
+    }
+    // Check for app update
+    fun checkForUpdate(onResult: (Boolean, String?, String?) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val response = api.checkAppVersion()
+                if (response.success) {
+                    onResult(true, response.latest_version, response.update_url)
+                } else {
+                    onResult(false, null, null)
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "Version check failed")
+                onResult(false, null, null)
+            }
+        }
+    }
+    // Update National ID Expiry Date
+    fun updateNIDExpiry(workerId: String, expiryDate: String, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val response = api.updateNIDExpiry(workerId, expiryDate)
+
+                if (response.success) {
+                    // Refresh worker details so the card updates
+                    fetchWorkerDetails(getApplication<Application>().applicationContext) { error ->
+                        error?.let { Timber.e(it, "Refresh after NID expiry update failed") }
+                    }
+                    onResult(true, response.message ?: "NID Expiry i save finis")
+                } else {
+                    onResult(false, response.message ?: "Failed to save expiry date")
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "updateNIDExpiry failed")
+                onResult(false, "Network error. Please check your connection.")
+            }
+        }
+        // Update NID + Expiry Date
+
+
+    }
+    // Save NID number + Expiry (when NID is missing)
+    fun updateNIDAndExpiry(workerId: String, nid: String, expiryDate: String, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val response = api.updateNIDAndExpiry(workerId, nid, expiryDate)
+
+                if (response.success) {
+                    fetchWorkerDetails(getApplication<Application>().applicationContext) { error ->
+                        error?.let { Timber.e(it, "Refresh after NID+expiry failed") }
+                    }
+                    onResult(true, response.message ?: "National ID mo expiry i save finis")
+                } else {
+                    onResult(false, response.message ?: "Failed to save")
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "updateNIDAndExpiry failed")
+                onResult(false, "Network error. Please check your connection.")
+            }
+        }
+    }
+
+    // Update only Expiry Date (when NID already exists)
+    fun updateNIDExpiryOnly(workerId: String, expiryDate: String, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val response = api.updateNIDExpiryOnly(workerId, expiryDate)
+
+                if (response.success) {
+                    fetchWorkerDetails(getApplication<Application>().applicationContext) { error ->
+                        error?.let { Timber.e(it, "Refresh after expiry update failed") }
+                    }
+                    onResult(true, response.message ?: "NID Expiry i update finis")
+                } else {
+                    onResult(false, response.message ?: "Failed to update expiry")
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "updateNIDExpiryOnly failed")
+                onResult(false, "Network error. Please check your connection.")
+            }
+        }
+    }
+    fun loadRequiredTasks(scheme: String, onResult: (List<String>) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val response = api.getRequiredTasks(scheme)
+                if (response.success) {
+                    onResult(response.tasks)
+                } else {
+                    onResult(emptyList())
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to load required tasks")
+                onResult(emptyList())
+            }
+        }
+    }
+    // ====================== NEW: NEARBY SERVICES FOR INFORMATIONSCREEN ======================
+
+    // Current worker location (used by InformationScreen Nearby section)
+    private val _currentLocation = MutableStateFlow<LatLng?>(null)
+    val currentLocation: StateFlow<LatLng?> = _currentLocation.asStateFlow()
+
+    // Refresh location - reuses your existing saveLocation pattern + FusedLocationProvider
+    // Call this from InformationScreen Refresh button or on screen load
+    // Temporary hard-coded version for testing Nearby Services
+    // Real location version for InformationScreen (Nearby Services)
+    // Clean real location version - no Ayr fallback
+    fun refreshCurrentLocation(context: Context) {
+        viewModelScope.launch {
+            try {
+                if (ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.ACCESS_FINE_LOCATION
+                    ) != PackageManager.PERMISSION_GRANTED) {
+
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Location permission is required for nearby services.", Toast.LENGTH_LONG).show()
+                    }
+                    return@launch
+                }
+
+                val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
+                val location: Location? = fusedLocationClient.lastLocation.await()
+
+                if (location != null) {
+                    val latLng = LatLng(location.latitude, location.longitude)
+                    _currentLocation.value = latLng
+
+                    // Save to backend like "Find Me"
+                    saveLocation(context, location.latitude, location.longitude, "nearby_services")
+
+                    Timber.i("📍 Real location obtained: ${location.latitude}, ${location.longitude}")
+
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Finding nearby services near you...", Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Could not get your current location. Please try again.", Toast.LENGTH_SHORT).show()
+                    }
+                    Timber.w("No location returned from FusedLocationProvider")
+                }
+
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to refresh location for Nearby Services")
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Location error. Please check GPS and try again.", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    private fun useTestAyrLocation(context: Context) {
+        val ayrLatLng = LatLng(-19.57, 147.40)
+        _currentLocation.value = ayrLatLng
+        Timber.i("✅ Using test Ayr location (real GPS not available)")
+        Toast.makeText(context, "Using test location (Ayr, QLD)", Toast.LENGTH_SHORT).show()
+    }
+    // Fetch nearby banks, churches, supermarkets, Western Union (25km radius)
+    suspend fun fetchNearbyServices(
+        lat: Double,
+        lng: Double,
+        radiusKm: Int = 25
+    ): List<NearbyPlace> {
+        return try {
+            val radiusMeters = (radiusKm * 1000).toDouble()
+
+            val request = NearbySearchRequest(
+                includedTypes = listOf(
+                    "bank",
+                    "supermarket",
+                    "grocery_store",
+                    "store",           // Kmart, Big W, etc.
+                    "gas_station",     // petrol stations
+                    "restaurant",      // fast food only
+                    "hospital",
+                    "doctor",
+                    "pharmacy",
+                    "church"
+                ),
+                maxResultCount = 20,
+                locationRestriction = LocationRestriction(
+                    circle = Circle(
+                        center = Center(lat, lng),
+                        radius = radiusMeters
+                    )
+                )
+            )
+
+            Timber.i("🔄 Calling proxy for strict nearby services → lat=$lat, lng=$lng")
+
+            val response = api.searchNearbyPlacesProxy(request)
+
+            val places = response.places ?: emptyList()
+
+            places.mapNotNull { place ->
+                val name = place.displayName?.text ?: return@mapNotNull null
+                val placeLat = place.location?.latitude ?: return@mapNotNull null
+                val placeLng = place.location?.longitude ?: return@mapNotNull null
+
+                val distanceKm = calculateHaversineDistance(lat, lng, placeLat, placeLng)
+
+                val types = place.types ?: emptyList()
+                val nameLower = name.lowercase()
+
+                // === STRICT FILTER: Block any pub, bar, hotel, tavern, club ===
+                if (nameLower.contains("hotel") ||
+                    nameLower.contains("pub") ||
+                    nameLower.contains("bar") ||
+                    nameLower.contains("tavern") ||
+                    nameLower.contains("club") ||
+                    nameLower.contains("liquor") ||
+                    nameLower.contains("bottle shop") ||
+                    types.any { it.contains("night_club", ignoreCase = true) || it.contains("bar", ignoreCase = true) }) {
+                    Timber.d("Filtered out potential pub/hotel: $name")
+                    return@mapNotNull null
+                }
+
+                val friendlyType = when {
+                    nameLower.contains("western union") -> "Western Union"
+                    types.any { it.contains("supermarket", ignoreCase = true) || it.contains("grocery", ignoreCase = true) } -> "Supermarket"
+                    types.contains("bank") -> "Bank"
+                    types.any { it.contains("hospital", ignoreCase = true) || it.contains("doctor", ignoreCase = true) || it.contains("pharmacy", ignoreCase = true) } -> "Medical"
+                    types.contains("gas_station") -> "Petrol Station"
+                    types.any { it.contains("restaurant", ignoreCase = true) } -> "Fast Food"
+                    types.any { it.contains("store", ignoreCase = true) || it.contains("shopping", ignoreCase = true) } -> "Retail"
+                    types.contains("church") -> "Church"
+                    else -> "Service"
+                }
+
+                NearbyPlace(
+                    name = name,
+                    type = friendlyType,
+                    address = place.formattedAddress ?: "Address unavailable",
+                    phone = place.internationalPhoneNumber,
+                    distanceKm = distanceKm,
+                    latLng = LatLng(placeLat, placeLng)
+                )
+            }.sortedBy { it.distanceKm }
+
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to fetch nearby services from proxy")
+            emptyList()
+        }
+    }
+
+    // Haversine distance helper (km)
+    private fun calculateHaversineDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val earthRadius = 6371.0
+        val dLat = Math.toRadians(lat2 - lat1)
+        val dLon = Math.toRadians(lon2 - lon1)
+        val a = sin(dLat / 2) * sin(dLat / 2) +
+                cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) *
+                sin(dLon / 2) * sin(dLon / 2)
+        val c = 2 * atan2(sqrt(a), sqrt(1 - a))
+        return earthRadius * c
+    }
 }
+
 

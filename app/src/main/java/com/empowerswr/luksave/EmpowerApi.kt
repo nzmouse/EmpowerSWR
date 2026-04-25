@@ -3,6 +3,8 @@ package com.empowerswr.luksave
 
 import retrofit2.Response
 import retrofit2.http.Body
+import retrofit2.http.Field
+import retrofit2.http.FormUrlEncoded
 import retrofit2.http.GET
 import retrofit2.http.POST
 import retrofit2.http.Query
@@ -128,4 +130,74 @@ interface EmpowerApi {
         @Query("token") token: String,
         @Body request: UpdateUsernameRequest
     ): UpdateUsernameResponse
+
+    @POST("api.php/update-medical")  // or whatever path your backend uses
+    suspend fun updateMedical(
+        @Query("workerId") workerId: String,
+        @Query("medical") medicalDate: String? = "",
+        @Query("emed") emedStatus: String
+    ): Response<Map<String, String?>>
+
+    @POST("api.php/save_nid")
+    suspend fun saveNID(
+        @Query("workerId") workerId: String,
+        @Query("nid") nid: String
+    ): ApiResponse
+
+    @FormUrlEncoded
+    @POST("api.php/verify_for_reset")
+    suspend fun verifyForReset(
+        @Field("type") type: String,      // "passport" or "nid"
+        @Field("value") value: String,
+        @Field("answer") answer: String
+    ): VerifyResetResponse
+
+    @POST("api.php/reset_pin")
+    suspend fun resetPin(
+        @Query("workerId") workerId: String,
+        @Query("new_pin") newPin: String
+    ): ApiResponse
+
+    @POST("api.php/save_nid_and_secret")
+    suspend fun saveNIDAndSecret(
+        @Query("workerId") workerId: String,
+        @Query("nid") nid: String,
+        @Query("secretAnswer") secretAnswer: String
+    ): ApiResponse
+
+    @GET("api.php/app_version")
+    suspend fun checkAppVersion(): AppVersionResponse
+
+    @POST("api.php/update_nid_expiry")
+    suspend fun updateNIDExpiry(
+        @Query("workerId") workerId: String,
+        @Query("expiryDate") expiryDate: String
+    ): ApiResponse
+
+    @POST("api.php/update_nid_and_expiry")
+    suspend fun updateNIDAndExpiry(
+        @Query("workerId") workerId: String,
+        @Query("nid") nid: String,
+        @Query("expiryDate") expiryDate: String
+    ): ApiResponse
+
+    @POST("api.php/update_nid_expiry_only")
+    suspend fun updateNIDExpiryOnly(
+        @Query("workerId") workerId: String,
+        @Query("expiryDate") expiryDate: String
+    ): ApiResponse
+
+    @GET("api.php/required_tasks")
+    suspend fun getRequiredTasks(@Query("scheme") scheme: String): RequiredTasksResponse
+
+    @retrofit2.http.POST("https://places.googleapis.com/v1/places:searchNearby")  // or your PHP proxy endpoint, e.g. "proxy/places-nearby"
+    suspend fun searchNearbyPlaces(
+        @retrofit2.http.Body request: NearbySearchRequest,
+        @retrofit2.http.Header("X-Goog-Api-Key") apiKey: String = "",  // empty if using proxy
+        @retrofit2.http.Header("X-Goog-FieldMask") fieldMask: String =
+            "places.displayName,places.formattedAddress,places.internationalPhoneNumber,places.location,places.types"
+    ): GooglePlacesResponse
+
+    @POST("proxy/places-nearby.php")   // or whatever endpoint you create on your PHP server
+    suspend fun searchNearbyPlacesProxy(@Body request: NearbySearchRequest): GooglePlacesResponse
 }

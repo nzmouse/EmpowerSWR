@@ -38,7 +38,14 @@ data class WorkerResponse(
     val birthProvince: String?,
     val ppissued: String?,
     val ppexpiry: String?,
-    val pendingFields: List<String>? = null
+    val pendingFields: List<String>? = null,
+    val hapid: String? = null,
+    val medical: String? = null,
+    val emed: String? = null,
+    val rsecountry: String? = null,
+    val nid: String? = null,
+    val NIDExp: String? = null,
+    val secretQuestion: String? = null
 )
 data class HistoryResponse(
     val team: String?,
@@ -194,3 +201,62 @@ data class UpdateUsernameResponse(
     val success: Boolean,
     val message: String? // e.g., "Username updated" or "Username already taken"
 )
+data class ApiResponse(
+    val success: Boolean,
+    val message: String? = null
+)
+
+data class VerifyResetResponse(
+    val success: Boolean,
+    val worker_id: Int? = null,
+    val username: String? = null,
+    val message: String? = null
+)
+
+data class AppVersionResponse(
+    val success: Boolean,
+    val latest_version: String? = null,
+    val minimum_version: String? = null,
+    val update_url: String? = null
+)
+
+data class RequiredTasksResponse(
+    val success: Boolean,
+    val tasks: List<String> = emptyList(),
+    val scheme: String = ""
+)
+
+data class NearbyPlace(
+    val name: String,
+    val type: String,           // "Supermarket", "Bank", "Church", "Western Union"
+    val address: String,
+    val phone: String?,
+    val distanceKm: Double,
+    val latLng: com.google.android.gms.maps.model.LatLng
+)
+
+// Google Places (New) models - minimal for our needs
+data class GooglePlacesResponse(
+    val places: List<GooglePlace>?
+)
+
+data class GooglePlace(
+    val displayName: GoogleDisplayName?,
+    val formattedAddress: String?,
+    val internationalPhoneNumber: String?,
+    val location: GoogleLocation?,
+    val types: List<String>?
+)
+
+data class GoogleDisplayName(val text: String?)
+data class GoogleLocation(val latitude: Double?, val longitude: Double?)
+
+data class NearbySearchRequest(
+    val includedTypes: List<String> = listOf("bank", "church", "supermarket"),
+    val maxResultCount: Int = 20,
+    val locationRestriction: LocationRestriction
+)
+
+data class LocationRestriction(val circle: Circle)
+data class Circle(val center: Center, val radius: Double)  // radius in meters
+data class Center(val latitude: Double, val longitude: Double)

@@ -217,14 +217,24 @@ fun NavigationSetup(viewModel: EmpowerViewModel, downloadCompleteFlow: SharedFlo
     var isLoading by remember { mutableStateOf(false) }
 
     LaunchedEffect(token, currentDestination, showLogoutDialog) {
-        if (token == null && !showLogoutDialog && currentDestination != "login" && currentDestination != "registration") {
+        val currentRoute = navController.currentBackStackEntry?.destination?.route ?: ""
+
+        // Protect these screens from any auto-navigation
+        if (currentRoute == "forgot_credentials" || currentRoute == "registration") {
+            return@LaunchedEffect
+        }
+
+        // Only redirect to login if no token and not already on login
+        if (token == null && !showLogoutDialog && currentRoute != "login") {
             navController.navigate("login") {
                 popUpTo(navController.graph.startDestinationId) { inclusive = true }
                 launchSingleTop = true
             }
             initialNavigationDone = false
-        } else if (token != null && !initialNavigationDone && (currentDestination == "login" || currentDestination == null)) {
-            delay(500)
+        }
+        // Only go to home after successful login (and not already on home)
+        else if (token != null && !initialNavigationDone && currentRoute == "login") {
+            delay(300)
             navController.navigate("home") {
                 popUpTo(navController.graph.startDestinationId) { inclusive = true }
                 launchSingleTop = true
@@ -430,7 +440,7 @@ fun NavigationSetup(viewModel: EmpowerViewModel, downloadCompleteFlow: SharedFlo
     ) { innerPadding ->
         NavHost(
             navController = navController,
-            startDestination = if (PrefsHelper.hasRegistered(context)) "login" else "registration",
+            startDestination = "login",
             modifier = Modifier.padding(innerPadding)
         ) {
             composable("registration") {
@@ -538,6 +548,10 @@ fun NavigationSetup(viewModel: EmpowerViewModel, downloadCompleteFlow: SharedFlo
             }
             composable("settings dancer") {
                 SettingsScreen(navController = navController)
+            }
+
+            composable("forgot_credentials") {
+                ForgotCredentialsScreen(viewModel = viewModel, navController = navController)
             }
         }
     }

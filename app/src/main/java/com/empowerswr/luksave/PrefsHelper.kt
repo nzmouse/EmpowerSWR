@@ -17,9 +17,9 @@ object PrefsHelper {
         prefs.edit().putString("workerId", workerId).apply()
     }
 
-    fun getWorkerId(context: Context): String? {
-        val prefs = context.getSharedPreferences("EmpowerSWRPrefs", Context.MODE_PRIVATE)
-        return prefs.getString("workerId", null)
+    fun getWorkerId(context: Context?): String? {
+        return context?.getSharedPreferences("EmpowerSWRPrefs", Context.MODE_PRIVATE)
+            ?.getString("workerId", null)
     }
 
     fun saveFcmToken(context: Context, fcmToken: String) {
@@ -68,16 +68,23 @@ object PrefsHelper {
         val surname = prefs.getString("surname", "Unknown") ?: "Unknown"
         return Pair(givenName, surname)
     }
-    fun saveWorkerDetails(context: Context, firstName: String?, surname: String?) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit {
-            putString("firstName", firstName ?: "Unknown")
-                .putString("surname", surname ?: "Unknown")
+    fun saveWorkerDetails(context: Context?, firstName: String?, surname: String?) {
+        context?.let { ctx ->
+            val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.edit {
+                putString("firstName", firstName ?: "Unknown")
+                putString("surname", surname ?: "Unknown")
+            }
         }
     }
-    fun clearPrefs(context: Context) {
-        val prefs = context.getSharedPreferences("EmpowerSWRPrefs", Context.MODE_PRIVATE)
-        prefs.edit().clear().apply()
+    fun clearPrefs(context: Context?) {
+        context?.let { ctx ->
+            val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.edit().clear().apply()
+
+            // Also clear any other stored values if needed
+            // e.g. prefs.edit().remove("workerId").apply()
+        }
     }
 
     fun saveUsername(context: Context, username: String?) {

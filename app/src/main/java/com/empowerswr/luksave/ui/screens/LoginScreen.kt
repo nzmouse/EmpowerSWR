@@ -376,6 +376,14 @@ fun LoginScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
+            TextButton(
+                onClick = { navController.navigate("forgot_credentials") }
+            ) {
+                Text("Mi fogetem PIN o Username?")
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
             // SINGLE Register Button - Dynamic Colors
             val prefs = context.getSharedPreferences("empower_prefs", Context.MODE_PRIVATE)
             val hasRegistered = prefs.getBoolean("has_registered", false)
