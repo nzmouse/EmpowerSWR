@@ -1375,7 +1375,16 @@ fun HomeScreen(
             onDismissRequest = { showUpdateDialog = false },
             title = { Text("Niu Version i Redi") },
             text = {
-                Text("Niu version blong Luksave i stap long Google Play.\n\nPlis update blong i gat ol best features mo fix.")
+                Text("""
+                    Niu version blong Luksave i stap long Google Play.
+                        
+                    • Ol samting we i niu:
+                    • Forgetem Login Ditel Skrin (isi blong faendem username o pin)
+                    • Infomesen Scrin updet  (Soem ol bank, supamaket, ples blong kaekae we i klosap)
+                    • Login mo Home screen i kam mo gud
+                        
+                    Plis update from i gat ol best features mo fix.
+                """.trimIndent())
             },
             confirmButton = {
                 Button(onClick = {
