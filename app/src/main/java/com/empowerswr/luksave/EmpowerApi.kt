@@ -1,6 +1,7 @@
 package com.empowerswr.luksave
 
 
+import okhttp3.RequestBody
 import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.Field
@@ -26,8 +27,10 @@ interface EmpowerApi {
     suspend fun checkIn(@Query("token") token: String, @Body request: CheckInRequest): CheckInResponse
 
     @POST("api.php/update-fcm-token")
-    suspend fun updateFcmToken(@Query("workerId") workerId: String, @Body token: String)
-
+    suspend fun updateFcmToken(
+        @Query("workerId") workerId: String,
+        @Body token: RequestBody   // Send as plain text
+    ): Response<Unit>
     @GET("api.php/history")
     suspend fun getWorkerHistory(@Query("workerId") workerId: String): List<HistoryResponse>
 
@@ -200,4 +203,10 @@ interface EmpowerApi {
 
     @POST("proxy/places-nearby.php")   // or whatever endpoint you create on your PHP server
     suspend fun searchNearbyPlacesProxy(@Body request: NearbySearchRequest): GooglePlacesResponse
+
+    @POST("api.php/notification-read")
+    suspend fun reportNotificationRead(
+        @Query("workerId") workerId: String,
+        @Query("notificationId") notificationId: String
+    ): Response<Unit>
 }

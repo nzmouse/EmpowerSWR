@@ -11,6 +11,7 @@ import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
@@ -41,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -56,9 +58,18 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
+import retrofit2.Retrofit
+import retrofit2.converter.gson.GsonConverterFactory
 import timber.log.Timber
 import java.io.File
 
+private val api: EmpowerApi by lazy {
+    Retrofit.Builder()
+        .baseUrl("https://db.empowerswr.com/api/")
+        .addConverterFactory(GsonConverterFactory.create())
+        .build()
+        .create(EmpowerApi::class.java)
+}
 class MainActivity : ComponentActivity() {
     private val downloadMap = mutableMapOf<Long, String>()
     private val _downloadCompleteFlow = MutableSharedFlow<Pair<Long, String>>(replay = 1)
@@ -81,7 +92,42 @@ class MainActivity : ComponentActivity() {
         downloadMap.remove(downloadId)
         Timber.d("MainActivity: Removed download ID: $downloadId")
     }
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
 
+        Timber.i("=== onNewIntent CALLED ===")
+        Timber.i("Extras: ${intent.extras}")
+
+        val title = intent.getStringExtra("notification_title")
+        val body = intent.getStringExtra("notification_body")
+        val notificationId = intent.getStringExtra("notification_id") ?: "unknown"
+
+        if (notificationId != "unknown") {
+            Timber.i("=== REPORTING READ === notificationId=$notificationId")
+            reportNotificationRead(notificationId)
+        } else {
+            Timber.i("No notification_id in intent")
+        }
+    }
+
+    private fun reportNotificationRead(notificationId: String) {
+        val workerId = PrefsHelper.getWorkerId(this) ?: run {
+            Timber.e("reportNotificationRead: No workerId found")
+            return
+        }
+
+        Timber.i("=== REPORTING READ === workerId=$workerId, notificationId=$notificationId")
+
+        lifecycleScope.launch {
+            try {
+                val response = api.reportNotificationRead(workerId, notificationId)
+                Timber.i("Read report SUCCESS - isSuccessful: ${response.isSuccessful}")
+            } catch (e: Exception) {
+                Timber.e(e, "Read report FAILED")
+            }
+        }
+    }
     private val downloadReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             Timber.d("MainActivity: Broadcast received, action: ${intent?.action}")
@@ -107,6 +153,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         // Register BroadcastReceiver
         val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE).apply {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -114,7 +161,6 @@ class MainActivity : ComponentActivity() {
                 addDataScheme("file")
             }
         }
-        Timber.d("MainActivity: Registering download receiver")
         try {
             val receiverFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 Context.RECEIVER_NOT_EXPORTED
@@ -126,27 +172,13 @@ class MainActivity : ComponentActivity() {
         } catch (e: Exception) {
             Timber.e(e, "MainActivity: Failed to register download receiver")
         }
+
         setContent {
             EmpowerSWRTheme {
-                val viewModel = ViewModelProvider(this, object : ViewModelProvider.Factory {
-                    override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                        return EmpowerViewModel(application) as T
-                    }
-                })[EmpowerViewModel::class.java]
+                val viewModel: EmpowerViewModel = ViewModelProvider(this)[EmpowerViewModel::class.java]
                 NavigationSetup(viewModel = viewModel, downloadCompleteFlow = downloadCompleteFlow)
             }
         }
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        val viewModel = ViewModelProvider(this, object : ViewModelProvider.Factory {
-            override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                return EmpowerViewModel(application) as T
-            }
-        })[EmpowerViewModel::class.java]
-        handleIntent(intent, viewModel)
     }
 
     private fun handleIntent(intent: Intent?, viewModel: EmpowerViewModel) {

@@ -116,6 +116,8 @@ fun WorkerDetailsScreen(
                 Timber.i("FCM Token loaded")
                 PrefsHelper.saveFcmToken(context, fcmToken)
                 val workerId = PrefsHelper.getWorkerId(context)
+                Timber.i("Real FCM token length: ${token?.length}")
+                Timber.i("Token preview: ${token?.take(50)}...")
                 if (workerId != null) {
                     viewModel.updateFcmToken(fcmToken, localContext)
                 } else {

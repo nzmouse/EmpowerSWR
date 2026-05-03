@@ -34,6 +34,8 @@ import android.location.Location
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.LocationServices
 import kotlinx.coroutines.tasks.await
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 
 class EmpowerViewModel(application: Application) : AndroidViewModel(application) {
     private val _token = mutableStateOf<String?>(null)
@@ -236,10 +238,19 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             val workerId = PrefsHelper.getWorkerId(context) ?: run {
                 Timber.e("No workerId available for updating FCM token")
+
                 return@launch
+
             }
+            val tokenBody = fcmToken.toRequestBody("text/plain".toMediaType())
+            Timber.i("=== FCM TOKEN DEBUG ===")
+            Timber.i("WorkerId: $workerId")
+            Timber.i("Token length: ${fcmToken.length}")
+            Timber.i("Token preview: ${fcmToken.take(80)}...")
+            Timber.i("========================")
+            Timber.i("Sending FCM token to server: workerId=$workerId | token=$fcmToken (length=${fcmToken.length})")
             try {
-                api.updateFcmToken(workerId, fcmToken)
+                api.updateFcmToken(workerId, tokenBody)
                 PrefsHelper.saveFcmToken(context, fcmToken)
                 Timber.i("FCM token updated for workerId=$workerId")
             } catch (e: Exception) {

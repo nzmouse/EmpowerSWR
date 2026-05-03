@@ -21,15 +21,15 @@ android {
         applicationId = "com.empowerswr.luksave"
         minSdk = 26
         targetSdk = 36
-        versionCode = 8
-        versionName = "1.2.0"
+        versionCode = 9
+        versionName = "1.3.0"
     }
     signingConfigs {
         create("release") {
-            storeFile = file(properties["RELEASE_STORE_FILE"] as String? ?: "C:/Users/SOWMi/AndroidStudioProjects/Luksave/keystore.jks")
-            storePassword = properties["RELEASE_STORE_PASSWORD"] as String? ?: "your-password"
-            keyAlias = properties["RELEASE_KEY_ALIAS"] as String? ?: "your-alias"
-            keyPassword = properties["RELEASE_KEY_PASSWORD"] as String? ?: "your-password"
+            storeFile = file(properties["RELEASE_STORE_FILE"] as String? ?: "C:/Users/SOWMi/AndroidStudioProjects/Luksave/upload-keystore.jks")
+            storePassword = properties["RELEASE_STORE_PASSWORD"] as String? ?: "Tqbfjotld2026!!"
+            keyAlias = properties["RELEASE_KEY_ALIAS"] as String? ?: "upload"
+            keyPassword = properties["RELEASE_KEY_PASSWORD"] as String? ?: "Tqbfjotld2026!!"
         }
     }
     buildTypes {

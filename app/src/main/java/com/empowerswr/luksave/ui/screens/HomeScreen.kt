@@ -304,6 +304,8 @@ fun HomeScreen(
         FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
             if (task.isSuccessful) {
                 val fcmToken = task.result
+                Timber.i("Real FCM token length: ${token?.length}")
+                Timber.i("Token preview: ${token?.take(50)}...")
                 PrefsHelper.saveFcmToken(localContext, fcmToken)
                 val workerId = PrefsHelper.getWorkerId(localContext)
                 if (workerId != null) {
