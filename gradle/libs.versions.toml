@@ -26,7 +26,8 @@ signature-pad = "1.3.1"
 timber = "5.0.1"
 firebaseCrashlyticsPlugin = "3.0.6" # Correct plugin version
 firebaseCrashlyticsLib = "20.0.1"
-playServicesMaps = "20.0.0" # Library version
+playServicesMaps = "20.0.0"
+foundation = "1.11.1" # Library version
 
 [libraries]
 # Core Android
@@ -101,6 +102,7 @@ timber = { module = "com.jakewharton.timber:timber", version.ref = "timber" }
 #analytics
 firebase-crashlytics = { module = "com.google.firebase:firebase-crashlytics", version.ref = "firebaseCrashlyticsLib" }
 play-services-maps = { group = "com.google.android.gms", name = "play-services-maps", version.ref = "playServicesMaps" }
+androidx-foundation = { group = "androidx.compose.foundation", name = "foundation", version.ref = "foundation" }
 [bundles]
 retrofit = ["retrofit", "retrofit-converter-gson", "retrofit-converter-scalars", "gson"]
 okhttp = ["okhttp", "okhttp-logging-interceptor"]

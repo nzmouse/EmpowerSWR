@@ -21,8 +21,8 @@ android {
         applicationId = "com.empowerswr.luksave"
         minSdk = 26
         targetSdk = 36
-        versionCode = 9
-        versionName = "1.3.0"
+        versionCode = 10
+        versionName = "1.4.0"
     }
     signingConfigs {
         create("release") {
@@ -111,6 +111,7 @@ dependencies {
     implementation(libs.play.services.location)
     implementation(libs.signature.pad)
     implementation(libs.play.services.maps)
+    implementation(libs.androidx.foundation)
     debugImplementation(libs.androidx.compose.ui.tooling)
     implementation(libs.coil.compose)
     implementation(libs.s3) {

@@ -1,11 +1,13 @@
 package com.empowerswr.luksave.ui.screens
 
 import android.Manifest
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.Location
 import android.net.Uri
+import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -22,6 +24,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.SoftwareKeyboardController
@@ -29,10 +32,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
 import com.empowerswr.luksave.EmpowerViewModel
 import com.empowerswr.luksave.PrefsHelper
+import com.empowerswr.luksave.findActivity
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationServices
 import com.google.firebase.messaging.FirebaseMessaging
@@ -41,6 +46,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import timber.log.Timber
+import android.provider.Settings
+import androidx.media3.common.util.UnstableApi
+import android.content.ContextWrapper
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.isSystemInDarkTheme
 
 // Current app version - UPDATED EVERY TIME A NEW VERSION IS RELEASED
 private const val CURRENT_APP_VERSION = "2.9"   // ← Change this when you upload a new version to Play Store
@@ -79,6 +91,7 @@ private suspend fun handleUsernameSubmission(
     }
 }
 
+@androidx.annotation.OptIn(UnstableApi::class)
 @Suppress("NewApi")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -118,12 +131,11 @@ fun HomeScreen(
     var isRefreshing by remember { mutableStateOf(false) }
     var showSettingsPrompt by remember { mutableStateOf(false) }
     val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
-    val localContext = LocalContext.current
     var secretAnswerInput by remember { mutableStateOf("") }
-    var showSkipWarning by remember { mutableStateOf(false) }
     var nidInput by remember { mutableStateOf("") }
     var nidExpInput by remember { mutableStateOf("") }
     var isSavingNID by remember { mutableStateOf(false) }
+    var showSkipWarning by remember { mutableStateOf(false) }
 
     // Log screen usage
     LaunchedEffect(Unit) {
@@ -133,6 +145,55 @@ fun HomeScreen(
         throw IllegalStateException("HomeScreen must be called within a ComponentActivity")
     }
 
+    val localContext = LocalContext.current
+
+    // ====================== NOTIFICATION PERMISSION SETUP ======================
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            createNotificationChannel(localContext)
+            Timber.i("Notifications permission granted")
+        } else {
+            coroutineScope.launch {
+                snackbarHostState.showSnackbar("You can enable notifications later in Settings for job alerts")
+            }
+        }
+    }
+
+    // Gentle auto-request (max 2 times)
+    LaunchedEffect(Unit) {
+        val prefs = localContext.getSharedPreferences("luksave_prefs", Context.MODE_PRIVATE)
+        val requestCount = prefs.getInt("notif_request_count", 0)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(localContext, Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED &&
+            requestCount < 2) {
+
+            delay(800)
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            prefs.edit().putInt("notif_request_count", requestCount + 1).apply()
+        }
+    }
+
+
+// Check if we should ask (use DataStore/SharedPreferences to track attempts)
+    val prefs = remember { context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE) }
+    var requestCount by remember { mutableStateOf(prefs.getInt("notification_request_count", 0)) }
+
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED &&
+            requestCount < 3) {  // Max 3 attempts
+
+            delay(1200)  // Small delay so it doesn't clash with other things
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+
+            prefs.edit().putInt("notification_request_count", requestCount + 1).apply()
+        }
+    }
     // Permission launcher
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -609,14 +670,69 @@ fun HomeScreen(
                     .padding(horizontal = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                item {
-                    Text(
-                        text = "Home Screen - Welcome!",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
+               // ==================== NOTIFICATION PERMISSION CARD ====================
+                    item {
+                        Text(
+                            text = "Home Screen - Welcome!",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        val isNotificationGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            ContextCompat.checkSelfPermission(
+                                localContext,
+                                Manifest.permission.POST_NOTIFICATIONS
+                            ) == PackageManager.PERMISSION_GRANTED
+                        } else true
+
+                        if (!isNotificationGranted) {
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isSystemInDarkTheme()) {
+                                        Color(0xFF4A3C1B)      // Dark golden brown
+                                    } else {
+                                        Color(0xFFFFF3CD)      // Light yellow (original)
+                                    }
+                                ),
+                                border = BorderStroke(
+                                    width = 1.dp,
+                                    color = if (isSystemInDarkTheme()) {
+                                        Color(0xFFFFD54F)      // Gold border in dark mode
+                                    } else {
+                                        Color(0xFFFFB300)
+                                    }
+                                )
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp)) {
+                                    Text(
+                                        text = "Never miss a job match!",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isSystemInDarkTheme()) Color(0xFFFFE082) else Color.Unspecified
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = "Enable notifications to get instant alerts for new jobs, applications, interviews, and messages.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = if (isSystemInDarkTheme()) Color.LightGray else Color.Unspecified
+                                    )
+
+                                    Spacer(modifier = Modifier.height(16.dp))
+
+                                    Button(
+                                        onClick = { /* your existing onClick */ },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text("Enable Notifications Now")
+                                    }
+                                }
+                            }
+                        }
 
                     Button(
                         onClick = {
@@ -1153,183 +1269,157 @@ fun HomeScreen(
                             }
                         }
                     }
-                    // ==================== MEDICAL CARD - Smart Logic (NZ + HAP ID + Acknowledgement) ====================
-                    workerDetails?.let { worker ->
-                        val emedStatus = worker.emed?.trim() ?: ""
-                        val hapId = worker.hapid?.trim() ?: ""
-                        val country = worker.rsecountry?.trim() ?: ""
-                        val isNZ = country.equals("NZ", ignoreCase = true)
+                        // ==================== MEDICAL CARD - Smart Logic (NZ + HAP ID) ====================
+                        workerDetails?.let { worker ->
+                            val emedStatus = worker.emed?.trim() ?: ""
+                            val hapId = worker.hapid?.trim() ?: ""
+                            val country = worker.rsecountry?.trim() ?: ""
+                            val isNZ = country.equals("NZ", ignoreCase = true)
 
-                        val hasValidHapid = hapId.isNotEmpty() && hapId != "0" && hapId.lowercase() != "null"
+                            val hasValidHapid = hapId.isNotEmpty() && hapId != "0" && hapId.lowercase() != "null"
 
-                        // Decide whether to show the card at all
-                        val showMedicalCard = when {
-                            emedStatus.equals("Not required", ignoreCase = true) -> false
-                            emedStatus.equals("Required", ignoreCase = true) -> true          // show even without HAP ID
-                            isNZ -> true                                                      // NZ workers always see General Medical section
-                            hasValidHapid || emedStatus.equals("Not Yet", ignoreCase = true) -> true
-                            else -> !emedStatus.isEmpty()
-                        }
+                            // Only show medical card for workers who are "checked in" + have medical status
+                            val isCheckedIn = worker.notices in listOf("App Checkin", "App-Accepted", "Notified", "Reported In", "Underway")
 
-                        if (!showMedicalCard) return@let
+                            val showMedicalCard = when {
+                                !isCheckedIn -> false                                      // Only show to checked-in workers
+                                emedStatus.equals("Not required", ignoreCase = true) -> false
+                                isNZ -> true                                               // All NZ checked-in workers see General Medical
+                                emedStatus.equals("Required", ignoreCase = true) -> true
+                                hasValidHapid || emedStatus.equals("Not Yet", ignoreCase = true) -> true
+                                else -> emedStatus.isNotEmpty()
+                            }
 
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 8.dp)
-                                .border(
-                                    2.dp,
-                                    if (emedStatus == "ALERT!") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondary,
-                                    MaterialTheme.shapes.medium
-                                ),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = if (emedStatus == "ALERT!")
-                                    MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surface,
-                                contentColor = if (emedStatus == "ALERT!")
-                                    MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurface
-                            )
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(16.dp),
-                                horizontalAlignment = Alignment.Start
-                            ) {
-                                Text(
-                                    text = if (isNZ) "GENERAL MEDICAL (NZ)" else "eMEDICAL (Australia)",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (emedStatus == "ALERT!")
-                                        MaterialTheme.colorScheme.error
-                                    else
-                                        MaterialTheme.colorScheme.primary
+                            if (!showMedicalCard) return@let
+
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp)
+                                    .border(
+                                        2.dp,
+                                        if (emedStatus == "ALERT!") MaterialTheme.colorScheme.error
+                                        else MaterialTheme.colorScheme.secondary,
+                                        MaterialTheme.shapes.medium
+                                    ),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (emedStatus == "ALERT!")
+                                        MaterialTheme.colorScheme.errorContainer
+                                    else MaterialTheme.colorScheme.surface,
+                                    contentColor = if (emedStatus == "ALERT!")
+                                        MaterialTheme.colorScheme.onErrorContainer
+                                    else MaterialTheme.colorScheme.onSurface
                                 )
-
-                                Spacer(modifier = Modifier.height(12.dp))
-
-                                // HAP ID line (only show for non-NZ when relevant)
-                                if (!isNZ) {
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp)) {
                                     Text(
-                                        text = if (hasValidHapid) "HAP ID: $hapId" else "HAP ID: Not issued yet",
+                                        text = if (isNZ) "GENERAL MEDICAL (NZ)" else "eMEDICAL (Australia)",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (emedStatus == "ALERT!")
+                                            MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                    )
+
+                                    Spacer(modifier = Modifier.height(12.dp))
+
+                                    // === HAP ID (Only for non-NZ) ===
+                                    if (!isNZ) {
+                                        Text(
+                                            text = if (hasValidHapid) "HAP ID: $hapId" else "HAP ID: Not issued yet",
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            fontWeight = FontWeight.Medium,
+                                            color = if (hasValidHapid)
+                                                MaterialTheme.colorScheme.onSurface
+                                            else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                    }
+
+                                    // Current Status
+                                    val displayStatus = when {
+                                        emedStatus.isEmpty() -> "Pending"
+                                        emedStatus.equals("Not required", ignoreCase = true) -> "Not Required"
+                                        emedStatus.equals("Required", ignoreCase = true) -> "Required"
+                                        else -> emedStatus
+                                    }
+
+                                    Text(
+                                        text = "Current Status: $displayStatus",
                                         style = MaterialTheme.typography.bodyLarge,
                                         fontWeight = FontWeight.Medium,
-                                        color = if (hasValidHapid)
-                                            MaterialTheme.colorScheme.onSurface
-                                        else
-                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = if (emedStatus == "ALERT!")
+                                            MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
                                     )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                }
 
-                                // Current Status
-                                val displayStatus = when {
-                                    emedStatus.isEmpty() -> "Pending"
-                                    emedStatus.equals("Not required", ignoreCase = true) -> "Not Required"
-                                    emedStatus.equals("Required", ignoreCase = true) -> "Required"
-                                    else -> emedStatus
-                                }
+                                    Spacer(modifier = Modifier.height(16.dp))
 
-                                Text(
-                                    text = "Current Status: $displayStatus",
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    fontWeight = FontWeight.Medium,
-                                    color = if (emedStatus == "ALERT!")
-                                        MaterialTheme.colorScheme.error
-                                    else
-                                        MaterialTheme.colorScheme.onSurface
-                                )
+                                    // ==================== BUTTON / INFO LOGIC ====================
+                                    when {
+                                        emedStatus == "ALERT!" -> {
+                                            OutlinedButton(
+                                                onClick = { /* disabled */ },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                enabled = false,
+                                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                                            ) {
+                                                Text("⚠️ PROBLEM: Kalem ofis naoia (ALERT!)")
+                                            }
 
-                                Spacer(modifier = Modifier.height(16.dp))
-
-                                // ==================== BUTTON LOGIC ====================
-
-                                when {
-                                    // ALERT! case (highest priority)
-                                    emedStatus == "ALERT!" -> {
-                                        OutlinedButton(
-                                            onClick = { /* disabled */ },
-                                            modifier = Modifier.fillMaxWidth(),
-                                            enabled = false,
-                                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                                        ) {
-                                            Text("⚠️ PROBLEM: Kalem ofis naoia (ALERT!)")
+                                            Text(
+                                                text = "Medical blo yu i gat wan issue.\nPlis kolem office long 34357, 5534357, o 5534358 naoia.",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = MaterialTheme.colorScheme.error,
+                                                fontWeight = FontWeight.Bold
+                                            )
                                         }
 
-                                        Text(
-                                            text = "Medical blo yu i gat wan issue.\nPlis kolem office long 34357, 5534357, o 5534358 naoia.",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.error,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-
-                                    // 1. Has HAP ID + "Not Yet" → Acknowledgement button only
-                                    hasValidHapid && emedStatus.equals("Not Yet", ignoreCase = true) -> {
-                                        Button(
-                                            onClick = {
-                                                coroutineScope.launch {
-                                                    viewModel.acknowledgeGoingToMedical(context, worker.ID ?: "")   // use your actual ID field
-                                                }
-                                            },
-                                            modifier = Modifier.fillMaxWidth(),
-                                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
-                                        ) {
-                                            Text("✅ Bae mi go blong mekem e-medikel wantaem")
+                                        // NZ Workers - Informational only
+                                        isNZ -> {
+                                            Text(
+                                                text = "No eMedical required for NZ unless advised by NZ Immigration.\nGeneral medical still needed.",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
                                         }
 
-                                        Spacer(modifier = Modifier.height(8.dp))
-
-                                        Text(
-                                            text = "• Status will change to 'App-Going'\n• Then you can complete the medical",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-
-                                    // 2. Has HAP ID + "Sent" or "App-Going" → Mark Done button (sets to App-Clinic)
-                                    hasValidHapid && emedStatus in listOf("Sent", "App-Going") -> {
-                                        Button(
-                                            onClick = {
-                                                coroutineScope.launch {
-                                                    viewModel.markMedicalDone(context)   // this will set emed = "App-Clinic"
-                                                }
-                                            },
-                                            modifier = Modifier.fillMaxWidth(),
-                                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
-                                        ) {
-                                            Text("✅ Mi mekem medikel finis")
+                                        // Australia logic...
+                                        hasValidHapid && emedStatus.equals("Not Yet", ignoreCase = true) -> {
+                                            Button(
+                                                onClick = {
+                                                    coroutineScope.launch {
+                                                        viewModel.acknowledgeGoingToMedical(context, worker.ID ?: "")
+                                                    }
+                                                },
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Text("✅ Bae mi go blong mekem e-medikel wantaem")
+                                            }
                                         }
 
-                                        Spacer(modifier = Modifier.height(8.dp))
+                                        hasValidHapid && emedStatus in listOf("Sent", "App-Going") -> {
+                                            Button(
+                                                onClick = {
+                                                    coroutineScope.launch {
+                                                        viewModel.markMedicalDone(context)
+                                                    }
+                                                },
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Text("✅ Mi mekem medikel finis")
+                                            }
+                                        }
 
-                                        Text(
-                                            text = "• Status will change to 'App-Clinic'\n• Must be done at Medical Options or Medical Centre",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-
-                                    // 3. "Required" or other pending cases without HAP ID
-                                    emedStatus.equals("Required", ignoreCase = true) ||
-                                            (!hasValidHapid && emedStatus.equals("Not Yet", ignoreCase = true)) -> {
-                                        Text(
-                                            text = "HAP ID not yet issued. Please wait for the office to provide it.",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-
-                                    // 4. NZ workers - informational only for now
-                                    isNZ && emedStatus.isEmpty() -> {
-                                        Text(
-                                            text = "No eMedical required for NZ unless advised by NZ Immigration.\nGeneral medical still needed.",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
+                                        else -> {
+                                            Text(
+                                                text = "Mifala no mekem HAP ID blong yu yet. Traem jekem tumora o kalem ofis.",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
 
                     Spacer(modifier = Modifier.height(16.dp))
 
@@ -1568,4 +1658,29 @@ private fun isNewerVersion(current: String, latest: String): Boolean {
     } catch (e: Exception) {
         false
     }
+}
+// Safe way to get Activity from Context
+fun Context.findActivity(): Activity {
+    var currentContext: Context = this
+    while (currentContext is ContextWrapper) {
+        if (currentContext is Activity) {
+            return currentContext
+        }
+        currentContext = currentContext.baseContext
+    }
+    throw IllegalStateException("No Activity found in context chain for HomeScreen")
+}
+fun createNotificationChannel(context: Context) {
+    val channelId = "luksave_recruitment"
+    val channelName = "Job Alerts & Recruitment"
+    val importance = NotificationManager.IMPORTANCE_HIGH
+
+    val channel = NotificationChannel(channelId, channelName, importance).apply {
+        description = "Notifications for new jobs, applications, messages, etc."
+        enableLights(true)
+        enableVibration(true)
+    }
+
+    val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    notificationManager.createNotificationChannel(channel)
 }

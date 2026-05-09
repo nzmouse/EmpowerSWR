@@ -29,9 +29,15 @@ import java.time.LocalDate
 import java.time.ZoneId
 import kotlin.math.*
 import android.Manifest
+import android.app.Activity
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.ContextWrapper
 import android.content.pm.PackageManager
 import android.location.Location
+import android.os.Build
 import androidx.core.content.ContextCompat
+import androidx.core.content.ContextCompat.getSystemService
 import com.google.android.gms.location.LocationServices
 import kotlinx.coroutines.tasks.await
 import okhttp3.MediaType.Companion.toMediaType
@@ -154,7 +160,14 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
     private fun isValidJwt(token: String): Boolean {
         return token.split(".").size == 3
     }
-
+    fun Context.findActivity(): Activity {
+        var currentContext = this
+        while (currentContext is ContextWrapper) {
+            if (currentContext is Activity) return currentContext
+            currentContext = currentContext.baseContext
+        }
+        throw IllegalStateException("No Activity found in context")
+    }
     fun register(
         passport: String,
         surname: String,
@@ -646,7 +659,7 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
                     return@launch
                 }
 
-                if (workerId == null || currentToken == null) {  // ✅ Now SAFE
+                if (workerId == null ) {  // ✅ Now SAFE
                     _inboundFlightDetails.value = null
                     callback?.invoke(Exception("No worker ID or token available"))
                     return@launch
