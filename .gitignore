@@ -39,3 +39,6 @@ google-services.json
 *.apk
 *.aab
 *.ap_
+/app/release/data.csv.bak
+/app/src/main/java/com/empowerswr/luksave/network/test.kt
+/app/release/upload_cert.der
