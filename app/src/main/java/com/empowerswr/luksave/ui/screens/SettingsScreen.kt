@@ -9,6 +9,7 @@ import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -22,7 +23,13 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextAlign
@@ -39,6 +46,27 @@ import com.empowerswr.luksave.PrefsHelper
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import timber.log.Timber
+
+private fun findVersionLogoId(context: Context): Int {
+    val names = arrayOf(
+        "version_logo",
+        "version_icon",
+        "versionlogo",
+        "ic_version_logo",
+        "version_logo_foreground"
+    )
+
+
+    val types = arrayOf("drawable", "mipmap")
+    for (name in names) {
+        for (type in types) {
+            val id = context.resources.getIdentifier(name, type, context.packageName)
+            if (id != 0) return id
+        }
+    }
+
+    return 0
+}
 
 @Composable
 fun LocationToggle(
@@ -80,12 +108,11 @@ fun LocationToggle(
             )
         }
     }
-    // Log screen usage
+
     LaunchedEffect(Unit) {
-        Timber.i("ScreenUsage: LoginScreen displayed, workerId=${PrefsHelper.getWorkerId(context) ?: "unknown"}, timestamp=${System.currentTimeMillis()}")
-    }
-    // Initialize state
-    LaunchedEffect(Unit) {
+        Timber.i(
+            "ScreenUsage: SettingsScreen displayed, workerId=${PrefsHelper.getWorkerId(context) ?: "unknown"}, timestamp=${System.currentTimeMillis()}"
+        )
         updateState()
     }
 
@@ -137,8 +164,6 @@ fun LocationToggle(
                 modifier = Modifier.padding(end = 8.dp)
             )
         }
-
-
     }
 
     // Keep state synced when returning from system settings
@@ -156,173 +181,201 @@ fun SettingsScreen(navController: NavController) {
     val sharedPreferences = context.getSharedPreferences("LuksavePrefs", Context.MODE_PRIVATE)
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-            .verticalScroll(rememberScrollState()),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            text = "Settings",
-            style = MaterialTheme.typography.headlineSmall,
-            modifier = Modifier.padding(bottom = 16.dp)
-        )
-
-        // Location toggle
-        LocationToggle(
-            context = context,
-            sharedPreferences = sharedPreferences,
-            snackbarHostState = snackbarHostState
-        )
-        Text(
-            text = "Location is used for features like finding nearby services (e.g., churches, supermarkets).",
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 8.dp)
-        )
-
-        // Snackbar host
-        SnackbarHost(hostState = snackbarHostState)
-
-
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = "About",
-            style = MaterialTheme.typography.headlineSmall,
-            modifier = Modifier.padding(bottom = 16.dp)
-        )
-
-        // Privacy Policy link
-        val annotatedText = buildAnnotatedString {
-            append("Review our ")
-            val policyText = "Privacy Policy"
-            val start = length
-            withStyle(
-                style = SpanStyle(
-                    color = MaterialTheme.colorScheme.primary,
-                    textDecoration = TextDecoration.Underline
-                )
-            ) {
-                append(policyText)
-            }
-            addStringAnnotation(
-                tag = "URL",
-                annotation = "https://db.nougro.com/privacy-policy.html",
-                start = start,
-                end = start + policyText.length
-            )
-            append(" for details on how we handle your data.")
+    val versionLogoId = remember { findVersionLogoId(context) }
+    val versionName = remember {
+        try {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
+        } catch (_: Exception) {
+            "unknown"
         }
-        Text(
-            text = annotatedText,
-            style = MaterialTheme.typography.bodyMedium,
+    }
+    val versionNicknameId = remember {
+        context.resources.getIdentifier("version_nickname", "string", context.packageName)
+    }
+    val versionNickname = if (versionNicknameId != 0) stringResource(versionNicknameId) else ""
+    val versionLabel = if (versionNickname.isBlank()) versionName else "$versionName ($versionNickname)"
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (versionLogoId != 0) {
+            Image(
+                painter = painterResource(id = versionLogoId),
+                contentDescription = null,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .fillMaxWidth()
+                    .fillMaxHeight(),
+                contentScale = ContentScale.FillWidth,
+                colorFilter = ColorFilter.tint(
+                    Color.Black.copy(alpha = 0.18f),
+                    BlendMode.SrcAtop
+                ),
+                alpha = 0.28f
+            )
+        }
+
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 8.dp)
-                .clickable {
-                    val annotation = annotatedText.getStringAnnotations(tag = "URL", start = 0, end = annotatedText.length)
-                        .firstOrNull()
-                    annotation?.let {
-                        try {
-                            val intent = Intent(Intent.ACTION_VIEW, it.item.toUri())
-                            context.startActivity(intent)
-                        } catch (e: Exception) {
-                            coroutineScope.launch {
-                                snackbarHostState.showSnackbar("Unable to open link: ${e.message}")
+                .fillMaxSize()
+                .padding(16.dp)
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "Settings",
+                style = MaterialTheme.typography.headlineSmall,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+
+            LocationToggle(
+                context = context,
+                sharedPreferences = sharedPreferences,
+                snackbarHostState = snackbarHostState
+            )
+            Text(
+                text = "Location is used for features like finding nearby services (e.g., churches, supermarkets).",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp)
+            )
+
+            SnackbarHost(hostState = snackbarHostState)
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                text = "About",
+                style = MaterialTheme.typography.headlineSmall,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+
+            val annotatedText = buildAnnotatedString {
+                append("Review our ")
+                val policyText = "Privacy Policy"
+                val start = length
+                withStyle(
+                    style = SpanStyle(
+                        color = MaterialTheme.colorScheme.primary,
+                        textDecoration = TextDecoration.Underline
+                    )
+                ) {
+                    append(policyText)
+                }
+                addStringAnnotation(
+                    tag = "URL",
+                    annotation = "https://db.nougro.com/privacy-policy.html",
+                    start = start,
+                    end = start + policyText.length
+                )
+                append(" for details on how we handle your data.")
+            }
+            Text(
+                text = annotatedText,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp)
+                    .clickable {
+                        val annotation = annotatedText
+                            .getStringAnnotations(tag = "URL", start = 0, end = annotatedText.length)
+                            .firstOrNull()
+                        annotation?.let {
+                            try {
+                                val intent = Intent(Intent.ACTION_VIEW, it.item.toUri())
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                coroutineScope.launch {
+                                    snackbarHostState.showSnackbar("Unable to open link: ${e.message}")
+                                }
                             }
                         }
                     }
-                }
-        )
+            )
 
-
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.clickable {
-                    val intent = Intent(Intent.ACTION_VIEW, "https://github.com/nzmouse/EmpowerSWR".toUri())
-                    context.startActivity(intent)
-                }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                Icon(
-                    imageVector = Icons.Filled.Code,
-                    contentDescription = "Source Code",
-                    tint = MaterialTheme.colorScheme.primary
-                )
-                Text(
-                    text = "Source Code",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    textAlign = TextAlign.Center
-                )
-            }
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.clickable {
-                    val intent = Intent(Intent.ACTION_VIEW, "https://github.com/nzmouse/EmpowerSWR/blob/main/LICENSE.txt".toUri())
-                    context.startActivity(intent)
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.clickable {
+                        val intent = Intent(Intent.ACTION_VIEW, "https://github.com/nzmouse/EmpowerSWR".toUri())
+                        context.startActivity(intent)
+                    }
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Code,
+                        contentDescription = "Source Code",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "Source Code",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        textAlign = TextAlign.Center
+                    )
                 }
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Description,
-                    contentDescription = "License",
-                    tint = MaterialTheme.colorScheme.primary
-                )
-                Text(
-                    text = "License",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    textAlign = TextAlign.Center
-                )
-            }
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.clickable {
-                    val intent = Intent(Intent.ACTION_VIEW, "https://db.nougro.com/api.terms.php".toUri())
-                    context.startActivity(intent)
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.clickable {
+                        val intent = Intent(
+                            Intent.ACTION_VIEW,
+                            "https://github.com/nzmouse/EmpowerSWR/blob/main/LICENSE.txt".toUri()
+                        )
+                        context.startActivity(intent)
+                    }
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Description,
+                        contentDescription = "License",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "License",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        textAlign = TextAlign.Center
+                    )
                 }
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Info,
-                    contentDescription = "Terms of Use",
-                    tint = MaterialTheme.colorScheme.primary
-                )
-                Text(
-                    text = "Terms of Use",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    textAlign = TextAlign.Center
-                )
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.clickable {
+                        val intent = Intent(Intent.ACTION_VIEW, "https://db.nougro.com/api.terms.php".toUri())
+                        context.startActivity(intent)
+                    }
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Info,
+                        contentDescription = "Terms of Use",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "Terms of Use",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        textAlign = TextAlign.Center
+                    )
+                }
             }
-        }
-        Spacer(modifier = Modifier.height(16.dp))
-        Text(
-            text = "© 2025 EmpowerSWR. All rights reserved.\n" +
-                    "Luksave App, Version 1.4.0" +
-                    "This application is open source under the GNU AGPLv3 license due to the use of iText. " +
-                    "Luksave is the first recruiting app of its kind in the South West Pacific. " +
-                    "Unauthorized reproduction or distribution is prohibited.",
-            style = MaterialTheme.typography.bodySmall,
-            textAlign = TextAlign.Center,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 16.dp)
-        )
-        Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "© 2025 EmpowerSWR. All rights reserved.\n" +
+                        "Luksave App, Version $versionLabel\n" +
+                        "This application is open source under the GNU AGPLv3 license due to the use of iText. " +
+                        "Luksave is the first recruiting app of its kind in the South West Pacific. " +
+                        "Unauthorized reproduction or distribution is prohibited.",
+                style = MaterialTheme.typography.bodySmall,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 16.dp)
+            )
+            Spacer(modifier = Modifier.height(16.dp))
 
-        Button(onClick = { navController.popBackStack() }) {
-            Text("Back")
+            Button(onClick = { navController.popBackStack() }) {
+                Text("Back")
+            }
         }
     }
 }

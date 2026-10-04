@@ -21,8 +21,8 @@ android {
         applicationId = "com.empowerswr.luksave"
         minSdk = 26
         targetSdk = 36
-        versionCode = 10
-        versionName = "1.4.0"
+        versionCode = 11
+        versionName = "3.0"
     }
     signingConfigs {
         create("release") {
@@ -121,5 +121,15 @@ dependencies {
     implementation(libs.timber)
     implementation(libs.firebase.crashlytics)
     implementation(libs.json)
-    implementation(libs.html2pdf)
+    // PDF Viewer
+    implementation("com.github.alamin5g:Alamin5G-PDF-Viewer:v1.0.17")
+    // iText 7 Android (clean single artifact)
+    implementation("com.itextpdf.android:itext7-core-android:7.2.5") {
+        exclude(group = "com.itextpdf", module = "commons")
+        exclude(group = "com.itextpdf", module = "kernel")
+        exclude(group = "com.itextpdf", module = "layout")
+        exclude(group = "com.itextpdf", module = "io")
+        exclude(group = "com.itextpdf", module = "forms")
+    }
+
 }

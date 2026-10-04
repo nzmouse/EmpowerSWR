@@ -955,7 +955,7 @@ fun FlightsScreen(
                                                 }
                                             }
                                         }
-                                        if (details.pdbStatus == "None" || details.pdbStatus == "Messaged") {
+                                        if (details.pdbStatus == "Unaware" || details.pdbStatus == "None" || details.pdbStatus == "Messaged") {
                                             Spacer(modifier = Modifier.height(12.dp))
                                             Button(
                                                 onClick = {

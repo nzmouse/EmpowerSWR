@@ -45,7 +45,8 @@ data class WorkerResponse(
     val rsecountry: String? = null,
     val nid: String? = null,
     val NIDExp: String? = null,
-    val secretQuestion: String? = null
+    val secretQuestion: String? = null,
+    @SerializedName("emedDate") val emedDate: String? = null,
 )
 data class HistoryResponse(
     val team: String?,
@@ -260,3 +261,29 @@ data class NearbySearchRequest(
 data class LocationRestriction(val circle: Circle)
 data class Circle(val center: Center, val radius: Double)  // radius in meters
 data class Center(val latitude: Double, val longitude: Double)
+
+data class ClinicListResponse(
+    val success: Boolean,
+    val clinics: List<ClinicRow> = emptyList()
+)
+
+data class ClinicRow(
+    val clinicName: String?,
+    val clinicLocationLong: String?,
+    val clinicDifficulty: String?,
+    val clinicCost: String?,
+    val clinicTime: String?,
+    val clinicLat: String?,
+    val clinicLong: String?,
+    @SerializedName("clinicPreferred") val preferred: String? = null
+)
+data class MedicalClinic(
+    val name: String,
+    val difficulty: String,
+    val cost: String,
+    val assessTime: String,
+    val location: String,
+    val lat: Double,
+    val lng: Double,
+    val preferred: String = ""
+)

@@ -1476,6 +1476,53 @@ class EmpowerViewModel(application: Application) : AndroidViewModel(application)
         val c = 2 * atan2(sqrt(a), sqrt(1 - a))
         return earthRadius * c
     }
+
+    fun updateEmedicalDate(
+        context: Context,
+        workerId: String,
+        action: String,
+        date: String,
+        time: String
+    ) {
+        viewModelScope.launch {
+            try {
+                val response = api.updateEmedicalDate(workerId, action, date, time)
+                if (response.isSuccessful) {
+                    fetchWorkerDetails(context) { error ->
+                        error?.let { Timber.w("Refresh after emedical date failed: $it") }
+                    }
+                } else {
+                    Timber.e("updateEmedicalDate failed: ${response.code()} ${response.errorBody()?.string()}")
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "updateEmedicalDate failed")
+            }
+        }
+    }
+
+    fun loadClinics(preferred: String, onResult: (List<MedicalClinic>) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val response = api.getClinics(preferred)
+                val clinics = response.clinics.map {
+                    MedicalClinic(
+                        name = it.clinicName.orEmpty(),
+                        difficulty = it.clinicDifficulty.orEmpty(),
+                        cost = (it.clinicCost ?: 0).toString(),
+                        assessTime = it.clinicTime.orEmpty(),
+                        location = it.clinicLocationLong.orEmpty(),
+                        lat = it.clinicLat?.toDoubleOrNull() ?: 0.0,
+                        lng = it.clinicLong?.toDoubleOrNull() ?: 0.0,
+                        preferred = it.preferred.orEmpty()
+                    )
+                }
+                onResult(clinics)
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to load clinics")
+                onResult(emptyList())
+            }
+        }
+    }
 }
 
 

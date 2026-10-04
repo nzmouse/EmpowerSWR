@@ -209,4 +209,17 @@ interface EmpowerApi {
         @Query("workerId") workerId: String,
         @Query("notificationId") notificationId: String
     ): Response<Unit>
+
+    @POST("update_emedical_date.php")
+    suspend fun updateEmedicalDate(
+        @Query("workerId") workerId: String,
+        @Query("action") action: String,
+        @Query("date") date: String,
+        @Query("time") time: String
+    ): Response<Map<String, String>>
+
+    @GET("get_clinics.php")
+    suspend fun getClinics(@Query("preferred") preferred: String): ClinicListResponse
+
+
 }

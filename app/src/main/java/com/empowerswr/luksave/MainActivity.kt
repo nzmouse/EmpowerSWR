@@ -40,9 +40,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
+import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -50,6 +50,8 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.empowerswr.luksave.network.NetworkModule
+import com.empowerswr.luksave.network.NetworkModule.uploadService
+import com.empowerswr.luksave.ui.pdf.ContractSigningScreen
 import com.empowerswr.luksave.ui.screens.*
 import com.empowerswr.luksave.ui.theme.EmpowerSWRTheme
 import kotlinx.coroutines.delay
@@ -70,6 +72,7 @@ private val api: EmpowerApi by lazy {
         .build()
         .create(EmpowerApi::class.java)
 }
+
 class MainActivity : ComponentActivity() {
     private val downloadMap = mutableMapOf<Long, String>()
     private val _downloadCompleteFlow = MutableSharedFlow<Pair<Long, String>>(replay = 1)
@@ -92,6 +95,7 @@ class MainActivity : ComponentActivity() {
         downloadMap.remove(downloadId)
         Timber.d("MainActivity: Removed download ID: $downloadId")
     }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -99,8 +103,6 @@ class MainActivity : ComponentActivity() {
         Timber.i("=== onNewIntent CALLED ===")
         Timber.i("Extras: ${intent.extras}")
 
-        val title = intent.getStringExtra("notification_title")
-        val body = intent.getStringExtra("notification_body")
         val notificationId = intent.getStringExtra("notification_id") ?: "unknown"
 
         if (notificationId != "unknown") {
@@ -128,6 +130,7 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
     private val downloadReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             Timber.d("MainActivity: Broadcast received, action: ${intent?.action}")
@@ -135,7 +138,10 @@ class MainActivity : ComponentActivity() {
             Timber.d("MainActivity: Broadcast download ID: $id")
             val filename = getDownloadFilename(id)
             if (filename != null) {
-                val file = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), filename.replace("+", " ").replace("%20", " ").trim())
+                val file = File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                    filename.replace("+", " ").replace("%20", " ").trim()
+                )
                 Timber.d("MainActivity: Checking file: ${file.absolutePath}, exists: ${file.exists()}, size: ${file.length()}")
                 if (file.exists() && file.length() > 0 && file.extension.lowercase() == "pdf") {
                     _downloadCompleteFlow.tryEmit(id to filename)
@@ -154,7 +160,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Register BroadcastReceiver
         val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE).apply {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 addDataScheme("content")
@@ -178,6 +183,13 @@ class MainActivity : ComponentActivity() {
                 val viewModel: EmpowerViewModel = ViewModelProvider(this)[EmpowerViewModel::class.java]
                 NavigationSetup(viewModel = viewModel, downloadCompleteFlow = downloadCompleteFlow)
             }
+        }
+        try {
+            val view = findViewById<android.view.View>(android.R.id.content)
+            view.javaClass.getMethod("setFrameRate", Float::class.javaPrimitiveType)
+                .invoke(view, 60f)
+        } catch (_: Exception) {
+            // Ignore on older devices
         }
     }
 
@@ -228,6 +240,49 @@ fun Context.findActivity(): Activity? {
     return null
 }
 
+private const val ROUTE_LOGIN = "login"
+private const val ROUTE_HOME = "home"
+private const val ROUTE_REGISTRATION = "registration"
+private const val ROUTE_FORGOT = "forgot_credentials"
+private const val ROUTE_SETTINGS = "settings"
+
+private val AUTH_ROUTES = setOf(ROUTE_LOGIN, ROUTE_REGISTRATION, ROUTE_FORGOT)
+
+/**
+ * True only after NavHost has called setGraph(). Reading .graph before that
+ * throws IllegalStateException: You must call setGraph() before calling getGraph().
+ */
+private fun NavHostController.isGraphReady(): Boolean {
+    if (currentBackStackEntry == null) return false
+    return try {
+        graph
+        true
+    } catch (_: IllegalStateException) {
+        false
+    }
+}
+
+/**
+ * Navigate using route-string popUpTo so we never touch navController.graph
+ * during the first composition (graph is still null).
+ */
+private fun NavHostController.navigateClearingTo(route: String) {
+    if (!isGraphReady()) return
+    navigate(route) {
+        popUpTo(ROUTE_LOGIN) { inclusive = true }
+        launchSingleTop = true
+    }
+}
+
+private fun NavHostController.navigateTab(route: String) {
+    if (!isGraphReady()) return
+    navigate(route) {
+        popUpTo(ROUTE_HOME) { saveState = true }
+        launchSingleTop = true
+        restoreState = false
+    }
+}
+
 @SuppressLint("UnrememberedMutableState")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -242,36 +297,30 @@ fun NavigationSetup(viewModel: EmpowerViewModel, downloadCompleteFlow: SharedFlo
     var showLogoutDialog by remember { mutableStateOf(false) }
     var initialNavigationDone by rememberSaveable { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
-    val workerId = PrefsHelper.getWorkerId(context) ?: ""
     val coroutineScope = rememberCoroutineScope()
     var showFeedbackDialog by remember { mutableStateOf(false) }
     var feedbackText by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
 
+    // Wait until NavHost has attached the graph. On first composition
+    // currentDestination is null and graph.startDestinationId would crash.
     LaunchedEffect(token, currentDestination, showLogoutDialog) {
-        val currentRoute = navController.currentBackStackEntry?.destination?.route ?: ""
+        val route = currentDestination ?: return@LaunchedEffect
+        if (!navController.isGraphReady()) return@LaunchedEffect
 
-        // Protect these screens from any auto-navigation
-        if (currentRoute == "forgot_credentials" || currentRoute == "registration") {
+        if (route == ROUTE_FORGOT || route == ROUTE_REGISTRATION) {
             return@LaunchedEffect
         }
 
-        // Only redirect to login if no token and not already on login
-        if (token == null && !showLogoutDialog && currentRoute != "login") {
-            navController.navigate("login") {
-                popUpTo(navController.graph.startDestinationId) { inclusive = true }
-                launchSingleTop = true
-            }
+        if (token == null && !showLogoutDialog && route != ROUTE_LOGIN) {
+            navController.navigateClearingTo(ROUTE_LOGIN)
             initialNavigationDone = false
-        }
-        // Only go to home after successful login (and not already on home)
-        else if (token != null && !initialNavigationDone && currentRoute == "login") {
+        } else if (token != null && !initialNavigationDone && route == ROUTE_LOGIN) {
             delay(300)
-            navController.navigate("home") {
-                popUpTo(navController.graph.startDestinationId) { inclusive = true }
-                launchSingleTop = true
+            if (navController.isGraphReady()) {
+                navController.navigateClearingTo(ROUTE_HOME)
+                initialNavigationDone = true
             }
-            initialNavigationDone = true
         }
     }
 
@@ -285,10 +334,7 @@ fun NavigationSetup(viewModel: EmpowerViewModel, downloadCompleteFlow: SharedFlo
                     viewModel.logout(context)
                     showLogoutDialog = false
                     initialNavigationDone = false
-                    navController.navigate("login") {
-                        popUpTo(navController.graph.startDestinationId) { inclusive = true }
-                        launchSingleTop = true
-                    }
+                    navController.navigateClearingTo(ROUTE_LOGIN)
                 }) {
                     Text("Logout")
                 }
@@ -381,10 +427,7 @@ fun NavigationSetup(viewModel: EmpowerViewModel, downloadCompleteFlow: SharedFlo
                 }
                 LaunchedEffect(navigateToLogin) {
                     if (navigateToLogin) {
-                        navController.navigate("login") {
-                            popUpTo(navController.graph.startDestinationId) { inclusive = true }
-                            launchSingleTop = true
-                        }
+                        navController.navigateClearingTo(ROUTE_LOGIN)
                         navigateToLogin = false
                     }
                 }
@@ -427,8 +470,8 @@ fun NavigationSetup(viewModel: EmpowerViewModel, downloadCompleteFlow: SharedFlo
                             )
                         }
                         IconButton(onClick = {
-                            navController.navigate("settings") {
-                                popUpTo(navController.graph.startDestinationId) { saveState = true }
+                            navController.navigate(ROUTE_SETTINGS) {
+                                popUpTo(ROUTE_HOME) { saveState = true }
                                 launchSingleTop = true
                                 restoreState = false
                             }
@@ -451,19 +494,13 @@ fun NavigationSetup(viewModel: EmpowerViewModel, downloadCompleteFlow: SharedFlo
             )
         },
         bottomBar = {
-            if (token != null && currentDestination != "login" && currentDestination != "registration") {
+            if (token != null && currentDestination != ROUTE_LOGIN && currentDestination != ROUTE_REGISTRATION) {
                 NavigationBar {
                     navItems.forEach { item ->
                         NavigationBarItem(
                             icon = { Icon(item.icon, contentDescription = item.title) },
                             selected = currentDestination == item.route,
-                            onClick = {
-                                navController.navigate(item.route) {
-                                    popUpTo(navController.graph.startDestinationId) { saveState = true }
-                                    launchSingleTop = true
-                                    restoreState = false
-                                }
-                            }
+                            onClick = { navController.navigateTab(item.route) }
                         )
                     }
                 }
@@ -472,30 +509,27 @@ fun NavigationSetup(viewModel: EmpowerViewModel, downloadCompleteFlow: SharedFlo
     ) { innerPadding ->
         NavHost(
             navController = navController,
-            startDestination = "login",
+            startDestination = ROUTE_LOGIN,
             modifier = Modifier.padding(innerPadding)
         ) {
-            composable("registration") {
+            composable(ROUTE_REGISTRATION) {
                 RegistrationScreen(
                     viewModel = viewModel,
                     navController = navController
                 )
             }
-            composable("login") {
+            composable(ROUTE_LOGIN) {
                 LoginScreen(
                     viewModel = viewModel,
                     context = context,
                     navController = navController,
                     onLoginSuccess = {
                         initialNavigationDone = false
-                        navController.navigate("home") {
-                            popUpTo(navController.graph.startDestinationId) { inclusive = true }
-                            launchSingleTop = true
-                        }
+                        navController.navigateClearingTo(ROUTE_HOME)
                     }
                 )
             }
-            composable("home") {
+            composable(ROUTE_HOME) {
                 HomeScreen(
                     viewModel = viewModel,
                     context = context,
@@ -537,7 +571,7 @@ fun NavigationSetup(viewModel: EmpowerViewModel, downloadCompleteFlow: SharedFlo
                     navController = navController
                 )
             }
-            composable("settings") {
+            composable(ROUTE_SETTINGS) {
                 SettingsScreen(
                     navController = navController
                 )
@@ -559,6 +593,16 @@ fun NavigationSetup(viewModel: EmpowerViewModel, downloadCompleteFlow: SharedFlo
                     downloadCompleteFlow = downloadCompleteFlow
                 )
             }
+            composable("contractSigning/{filename}/{url}") { backStackEntry ->
+                val filename = backStackEntry.arguments?.getString("filename") ?: ""
+                val url = backStackEntry.arguments?.getString("url") ?: ""
+                ContractSigningScreen(
+                    filename = filename,
+                    contractUrl = url,
+                    uploadService = uploadService,
+                    onClose = { navController.popBackStack() }
+                )
+            }
             composable("edit_personal") {
                 EditPersonalScreen(
                     viewModel = viewModel,
@@ -571,18 +615,13 @@ fun NavigationSetup(viewModel: EmpowerViewModel, downloadCompleteFlow: SharedFlo
                     navController = navController
                 )
             }
-
             composable("edit_passport") {
                 EditPassportScreen(
                     viewModel = viewModel,
                     navController = navController
                 )
             }
-            composable("settings dancer") {
-                SettingsScreen(navController = navController)
-            }
-
-            composable("forgot_credentials") {
+            composable(ROUTE_FORGOT) {
                 ForgotCredentialsScreen(viewModel = viewModel, navController = navController)
             }
         }

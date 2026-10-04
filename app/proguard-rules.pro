@@ -211,3 +211,6 @@
 -dontwarn java.awt.**
 -dontwarn javax.imageio.**
 -dontwarn sharpen.config.**
+-dontwarn org.slf4j.impl.StaticLoggerBinder
+-dontwarn org.slf4j.impl.StaticMDCBinder
+-dontwarn org.slf4j.impl.StaticMarkerBinder

@@ -440,36 +440,25 @@ fun DocumentsScreen(
                                         IconButton(
                                             onClick = {
                                                 val currentTime = System.currentTimeMillis()
-                                                val fullFilename = file.url.substringAfterLast("/").substringBefore("?").replace("+", " ").replace("%20", " ").trim()
                                                 if (currentTime - lastClickTime > 2000) {
                                                     lastClickTime = currentTime
-                                                    lastNavigatedFile = fullFilename // Keep for logging
-                                                    navigationAttemptCount++
+                                                    val fullFilename = file.url.substringAfterLast("/").substringBefore("?")
+                                                        .replace("+", " ").replace("%20", " ").trim()
+
                                                     scope.launch {
-                                                        try {
-                                                            // Use the original filename from R2
-                                                            val encodedFilename = URLEncoder.encode(fullFilename, "UTF-8")
-                                                            val encodedUrl = URLEncoder.encode(file.url, "UTF-8")
-                                                           // Replace existing DocumentViewerScreen
-                                                            navController.navigate("documentViewer/$encodedFilename/$encodedUrl") {
-                                                                popUpTo("documentViewer/{filename}/{url}") { inclusive = true }
-                                                                launchSingleTop = true
-                                                                restoreState = false
-                                                            }
-                                                        } catch (e: Exception) {
-                                                            Timber.e(e, "DocumentsScreen: Navigation failed")
-                                                            snackbarHostState.showSnackbar("Navigation failed: ${e.message}")
+                                                        val encodedFilename = URLEncoder.encode(fullFilename, "UTF-8")
+                                                        val encodedUrl = URLEncoder.encode(file.url, "UTF-8")
+
+                                                        if (fullFilename.contains("- CON.") || fullFilename.contains("Contract", ignoreCase = true)) {
+                                                            navController.navigate("contractSigning/$encodedFilename/$encodedUrl")
+                                                        } else {
+                                                            navController.navigate("documentViewer/$encodedFilename/$encodedUrl")
                                                         }
                                                     }
-                                                } else {
-                                                    Timber.v("DocumentsScreen: Navigation debounced for filename=$fullFilename, lastClickTime=$lastClickTime, currentTime=$currentTime")
                                                 }
                                             }
                                         ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Visibility,
-                                                contentDescription = "View ${file.name}"
-                                            )
+                                            Icon(Icons.Default.Visibility, "View ${file.name}")
                                         }
                                         IconButton(
                                             onClick = {

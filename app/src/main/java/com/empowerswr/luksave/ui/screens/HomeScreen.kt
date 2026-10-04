@@ -14,10 +14,14 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
@@ -29,12 +33,17 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.core.net.toUri
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
+import com.empowerswr.luksave.MedicalClinic
 import com.empowerswr.luksave.EmpowerViewModel
 import com.empowerswr.luksave.PrefsHelper
 import com.empowerswr.luksave.findActivity
@@ -53,9 +62,23 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.window.Dialog
 
 // Current app version - UPDATED EVERY TIME A NEW VERSION IS RELEASED
 private const val CURRENT_APP_VERSION = "2.9"   // ← Change this when you upload a new version to Play Store
+
+// Important-task cards. Amber, not the Locate red, so workers can tell them apart.
+private val TaskAmberLight = Color(0xFFFFF4D6)
+private val TaskAmberDark = Color(0xFF5C4300)
+private val TaskBorderLight = Color(0xFFE65100)
+private val TaskBorderDark = Color(0xFFFFB300)
+private val TaskTitleLight = Color(0xFFBF360C)
+private val TaskTitleDark = Color(0xFFFFE082)
+private val TaskButtonLight = Color(0xFFE65100)
+private val TaskButtonDark = Color(0xFFFF8F00)
 private suspend fun handleUsernameSubmission(
     usernameInput: String,
     viewModel: EmpowerViewModel,
@@ -135,7 +158,12 @@ fun HomeScreen(
     var nidInput by remember { mutableStateOf("") }
     var nidExpInput by remember { mutableStateOf("") }
     var isSavingNID by remember { mutableStateOf(false) }
+    var isSavingMother by remember { mutableStateOf(false) }
+    var emedApptDate by rememberSaveable { mutableStateOf("") }
+    var emedApptTime by rememberSaveable { mutableStateOf("") }
+    var isSavingAppointment by remember { mutableStateOf(false) }
     var showSkipWarning by remember { mutableStateOf(false) }
+    var skippedMotherPrompt by rememberSaveable { mutableStateOf(false) }
 
     // Log screen usage
     LaunchedEffect(Unit) {
@@ -252,43 +280,39 @@ fun HomeScreen(
             ))
         }
     }
-    fun saveNIDAndSecret() {
-        Timber.tag("NID_SAVE").d("saveNIDAndSecret() START - nid='$nidInput', motherName='$secretAnswerInput'")
+    // Mother's name is independent of National ID. Pass the NID already on file
+    // so a later mother-name save does not clear it. Blank NID is allowed.
+    fun saveMotherNameOnly() {
+        val existingNid = workerDetails?.nid?.trim().orEmpty()
+        Timber.tag("MOTHER_SAVE").d("saveMotherNameOnly() START - existingNid='$existingNid', motherName='$secretAnswerInput'")
 
-        if (nidInput.length < 4) {
-            Toast.makeText(context, "National ID i mas gat least 4 digits", Toast.LENGTH_SHORT).show()
-            return
-        }
         if (secretAnswerInput.isBlank()) {
             Toast.makeText(context, "Plis putum nem blong mama blong yu", Toast.LENGTH_SHORT).show()
             return
         }
 
-        isSavingNID = true
+        isSavingMother = true
 
         coroutineScope.launch {
             val workerId = PrefsHelper.getWorkerId(context)
             if (workerId.isNullOrEmpty()) {
-                Timber.tag("NID_SAVE").d("No workerId found")
+                Timber.tag("MOTHER_SAVE").d("No workerId found")
                 Toast.makeText(context, "Session expired. Please log in again.", Toast.LENGTH_LONG).show()
-                isSavingNID = false
+                isSavingMother = false
                 return@launch
             }
 
-            Timber.tag("NID_SAVE").d("Calling ViewModel with workerId=$workerId")
-
             viewModel.updateWorkerNIDAndSecret(
                 workerId = workerId,
-                nid = nidInput,
-                motherName = secretAnswerInput      // <-- this must be passed
+                nid = existingNid,
+                motherName = secretAnswerInput
             ) { success, message ->
-                isSavingNID = false
-                nidInput = ""
+                isSavingMother = false
                 secretAnswerInput = ""
 
                 if (success) {
                     viewModel.fetchWorkerDetails(context) { }
-                    Toast.makeText(context, message ?: "National ID mo nem blong mama i save finis", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, message ?: "Nem blong mama i save finis", Toast.LENGTH_LONG).show()
                 } else {
                     Toast.makeText(context, message ?: "Failed to save. Please try again.", Toast.LENGTH_LONG).show()
                 }
@@ -337,6 +361,31 @@ fun HomeScreen(
                     onClick = { showSettingsPrompt = false }
                 ) {
                     Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showSkipWarning) {
+        AlertDialog(
+            onDismissRequest = { showSkipWarning = false },
+            title = { Text("Yu sua?") },
+            text = {
+                Text("Sapos yu skip nem blong mama, bae i had blong resetem PIN o faendem username sapos yu fogetem.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showSkipWarning = false
+                        skippedMotherPrompt = true
+                    }
+                ) {
+                    Text("Oraet, skip")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSkipWarning = false }) {
+                    Text("Go bak")
                 }
             }
         )
@@ -514,54 +563,124 @@ fun HomeScreen(
             false
         }
     }
-    // Helper to accept dd/mm/yyyy, dd-mm-yyyy, dd mmm yyyy, and convert to yyyy-mm-dd
+    // Accepts 31/12/2028, 31-12-2028, 31.12.2028, 2028-12-31, 31 Dec 2028,
+    // 31 December 2028, 31st Dec 2028, and Bislama month names. Returns yyyy-mm-dd.
     fun normaliseDate(input: String): String? {
-        val cleaned = input.trim().replace(Regex("[\\s/.-]+"), "-")  // normalise separators
+        val cleaned = input.trim()
+            .replace(Regex("(?i)(\\d+)(st|nd|rd|th)\\b"), "$1")
+            .replace(Regex("[\\s/.,-]+"), "-")
+            .trim('-')
 
-        // Try dd/mm/yyyy or dd-mm-yyyy
-        val ddmmyyyy = Regex("^(\\d{1,2})-(\\d{1,2})-(\\d{4})$").find(cleaned)
-        if (ddmmyyyy != null) {
-            val (d, m, y) = ddmmyyyy.destructured
-            val day = d.toIntOrNull() ?: return null
-            val month = m.toIntOrNull() ?: return null
-            val year = y.toIntOrNull() ?: return null
-            if (day in 1..31 && month in 1..12 && year in 1900..2100) {
-                return "%04d-%02d-%02d".format(year, month, day)
+        fun valid(year: Int, month: Int, day: Int): String? {
+            if (month !in 1..12 || day !in 1..31 || year !in 1900..2100) return null
+            return try {
+                val date = java.time.LocalDate.of(year, month, day)
+                "%04d-%02d-%02d".format(date.year, date.monthValue, date.dayOfMonth)
+            } catch (_: Exception) {
+                null
             }
         }
 
-        // Try dd mmm yyyy (e.g. 15 Dec 2028)
-        val ddmmmyyyy = Regex("^(\\d{1,2})-([A-Za-z]{3,9})-(\\d{4})$").find(cleaned)
-        if (ddmmmyyyy != null) {
-            val (d, m, y) = ddmmmyyyy.destructured
-            val day = d.toIntOrNull() ?: return null
-            val year = y.toIntOrNull() ?: return null
-            val month = when (m.lowercase()) {
-                "jan", "january" -> 1
-                "feb", "february" -> 2
-                "mar", "march" -> 3
-                "apr", "april" -> 4
-                "may" -> 5
-                "jun", "june" -> 6
-                "jul", "july" -> 7
-                "aug", "august" -> 8
-                "sep", "september" -> 9
-                "oct", "october" -> 10
-                "nov", "november" -> 11
-                "dec", "december" -> 12
-                else -> return null
-            }
-            if (day in 1..31 && year in 1900..2100) {
-                return "%04d-%02d-%02d".format(year, month, day)
-            }
+        fun monthNumber(name: String): Int? = when (name.lowercase()) {
+            "jan", "january", "januware", "januari" -> 1
+            "feb", "february", "febuware", "februari" -> 2
+            "mar", "march", "maj", "mas" -> 3
+            "apr", "april", "epril" -> 4
+            "may", "mei" -> 5
+            "jun", "june" -> 6
+            "jul", "july", "julai" -> 7
+            "aug", "august", "ogis", "ogast" -> 8
+            "sep", "sept", "september", "septemba" -> 9
+            "oct", "october", "oktoba" -> 10
+            "nov", "november", "novemba" -> 11
+            "dec", "december", "desemba" -> 12
+            else -> null
         }
 
-        // Already yyyy-mm-dd
-        if (cleaned.matches(Regex("^\\d{4}-\\d{2}-\\d{2}$"))) {
-            return cleaned
+        Regex("^(\\d{1,2})-(\\d{1,2})-(\\d{4})$").find(cleaned)?.let { match ->
+            val (d, m, y) = match.destructured
+            return valid(y.toInt(), m.toInt(), d.toInt())
+        }
+
+        Regex("^(\\d{4})-(\\d{1,2})-(\\d{1,2})$").find(cleaned)?.let { match ->
+            val (y, m, d) = match.destructured
+            return valid(y.toInt(), m.toInt(), d.toInt())
+        }
+
+        Regex("^(\\d{1,2})-(\\d{1,2})-(\\d{2})$").find(cleaned)?.let { match ->
+            val (d, m, y) = match.destructured
+            val year = 2000 + y.toInt()
+            return valid(year, m.toInt(), d.toInt())
+        }
+
+        Regex("^(\\d{1,2})-([A-Za-z]{3,12})-(\\d{4})$").find(cleaned)?.let { match ->
+            val (d, m, y) = match.destructured
+            val month = monthNumber(m) ?: return null
+            return valid(y.toInt(), month, d.toInt())
+        }
+
+        Regex("^(\\d{1,2})-([A-Za-z]{3,12})-(\\d{2})$").find(cleaned)?.let { match ->
+            val (d, m, y) = match.destructured
+            val month = monthNumber(m) ?: return null
+            return valid(2000 + y.toInt(), month, d.toInt())
         }
 
         return null
+    }
+
+    fun normaliseTime(input: String): String? {
+        val cleaned = input.trim().lowercase().replace(".", ":").replace(Regex("\\s+"), "")
+        val match = Regex("^(\\d{1,2}):(\\d{2})(am|pm)?$").find(cleaned) ?: return null
+        val (hRaw, mRaw, ampm) = match.destructured
+        var hour = hRaw.toIntOrNull() ?: return null
+        val minute = mRaw.toIntOrNull() ?: return null
+        if (minute !in 0..59) return null
+        when (ampm) {
+            "am" -> if (hour !in 1..12) return null else if (hour == 12) hour = 0
+            "pm" -> if (hour !in 1..12) return null else if (hour != 12) hour += 12
+            else -> if (hour !in 0..23) return null
+        }
+        return "%02d:%02d".format(hour, minute)
+    }
+
+    fun formatEmedDateBislama(value: String?): String? {
+        if (value.isNullOrBlank() || value.startsWith("0000-00-00")) return null
+        val parsed = try {
+            java.time.LocalDateTime.parse(value.trim().replace(" ", "T").take(19))
+        } catch (_: Exception) {
+            return null
+        }
+        val day = listOf("Sande", "Mande", "Tiusde", "Wenesde", "Tosde", "Fraede", "Sarede")[parsed.dayOfWeek.value % 7]
+        val month = listOf(
+            "Jenuware", "Februari", "Maj", "Epril", "Mei", "Jun",
+            "Julae", "Ogis", "Septemba", "Oktoba", "Novemba", "Disemba"
+        )[parsed.monthValue - 1]
+        val hour24 = parsed.hour
+        val hour12 = when (val h = hour24 % 12) { 0 -> 12; else -> h }
+        val ampm = if (hour24 < 12) "am" else "pm"
+        return "$day ${parsed.dayOfMonth} $month, $hour12:${"%02d".format(parsed.minute)}$ampm"
+    }
+
+    fun saveMedicalAppointment(workerId: String) {
+        val date = normaliseDate(emedApptDate)
+        val time = normaliseTime(emedApptTime)
+        if (workerId.isBlank()) {
+            Toast.makeText(context, "Session expired. Please log in again.", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (date == null || time == null) {
+            Toast.makeText(context, "Plis pikim date mo taem", Toast.LENGTH_LONG).show()
+            return
+        }
+        viewModel.updateEmedicalDate(context, workerId, "appointment", date, time)
+    }
+
+    fun saveMedicalDone(workerId: String, date: String, time: String) {
+        if (workerId.isBlank()) {
+            Toast.makeText(context, "Session expired. Please log in again.", Toast.LENGTH_LONG).show()
+            return
+        }
+        viewModel.updateEmedicalDate(context, workerId, "done", date, time)
     }
     // Save NID + Expiry Date
     // Save when NID number is missing (saves both NID + Expiry)
@@ -575,7 +694,7 @@ fun HomeScreen(
 
         val normalisedExpiry = normaliseDate(nidExpInput)
         if (normalisedExpiry == null) {
-            Toast.makeText(context, "Plis yusum date olsem: 31/12/2028 o 31-12-2028 o 31 Dec 2028", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, "Plis yusum date olsem: 31/12/2028, 31-12-2028, o 31 Dec 2028", Toast.LENGTH_LONG).show()
             return
         }
 
@@ -610,7 +729,7 @@ fun HomeScreen(
 
         val normalisedExpiry = normaliseDate(nidExpInput)
         if (normalisedExpiry == null) {
-            Toast.makeText(context, "Plis yusum date olsem: 31/12/2028 o 31-12-2028 o 31 Dec 2028", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, "Plis yusum date olsem: 31/12/2028, 31-12-2028, o 31 Dec 2028", Toast.LENGTH_LONG).show()
             return
         }
 
@@ -649,7 +768,9 @@ fun HomeScreen(
                     try {
                         isRefreshing = true
                         viewModel.fetchWorkerDetails(context) { error ->
-                            refreshError = error?.message?.let { "Refresh failed: $it" } ?: "Refresh failed"
+                            if (error != null) {
+                                refreshError = error.message?.let { "Refresh failed: $it" } ?: "Refresh failed"
+                            }
                             isRefreshing = false
                         }
                         delay(1000)
@@ -670,69 +791,69 @@ fun HomeScreen(
                     .padding(horizontal = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-               // ==================== NOTIFICATION PERMISSION CARD ====================
-                    item {
-                        Text(
-                            text = "Home Screen - Welcome!",
-                            style = MaterialTheme.typography.titleLarge,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
+                // ==================== NOTIFICATION PERMISSION CARD ====================
+                item {
+                    Text(
+                        text = "Home Screen - Welcome!",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
 
-                        val isNotificationGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                            ContextCompat.checkSelfPermission(
-                                localContext,
-                                Manifest.permission.POST_NOTIFICATIONS
-                            ) == PackageManager.PERMISSION_GRANTED
-                        } else true
+                    val isNotificationGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        ContextCompat.checkSelfPermission(
+                            localContext,
+                            Manifest.permission.POST_NOTIFICATIONS
+                        ) == PackageManager.PERMISSION_GRANTED
+                    } else true
 
-                        if (!isNotificationGranted) {
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 8.dp),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = if (isSystemInDarkTheme()) {
-                                        Color(0xFF4A3C1B)      // Dark golden brown
-                                    } else {
-                                        Color(0xFFFFF3CD)      // Light yellow (original)
-                                    }
-                                ),
-                                border = BorderStroke(
-                                    width = 1.dp,
-                                    color = if (isSystemInDarkTheme()) {
-                                        Color(0xFFFFD54F)      // Gold border in dark mode
-                                    } else {
-                                        Color(0xFFFFB300)
-                                    }
+                    if (!isNotificationGranted) {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (isSystemInDarkTheme()) {
+                                    Color(0xFF4A3C1B)      // Dark golden brown
+                                } else {
+                                    Color(0xFFFFF3CD)      // Light yellow (original)
+                                }
+                            ),
+                            border = BorderStroke(
+                                width = 1.dp,
+                                color = if (isSystemInDarkTheme()) {
+                                    Color(0xFFFFD54F)      // Gold border in dark mode
+                                } else {
+                                    Color(0xFFFFB300)
+                                }
+                            )
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Text(
+                                    text = "Never miss a job match!",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isSystemInDarkTheme()) Color(0xFFFFE082) else Color.Unspecified
                                 )
-                            ) {
-                                Column(modifier = Modifier.padding(16.dp)) {
-                                    Text(
-                                        text = "Never miss a job match!",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (isSystemInDarkTheme()) Color(0xFFFFE082) else Color.Unspecified
-                                    )
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text(
-                                        text = "Enable notifications to get instant alerts for new jobs, applications, interviews, and messages.",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = if (isSystemInDarkTheme()) Color.LightGray else Color.Unspecified
-                                    )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "Enable notifications to get instant alerts for new jobs, applications, interviews, and messages.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = if (isSystemInDarkTheme()) Color.LightGray else Color.Unspecified
+                                )
 
-                                    Spacer(modifier = Modifier.height(16.dp))
+                                Spacer(modifier = Modifier.height(16.dp))
 
-                                    Button(
-                                        onClick = { /* your existing onClick */ },
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text("Enable Notifications Now")
-                                    }
+                                Button(
+                                    onClick = { /* your existing onClick */ },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Enable Notifications Now")
                                 }
                             }
                         }
+                    }
 
                     Button(
                         onClick = {
@@ -903,19 +1024,24 @@ fun HomeScreen(
                                 }
                             }
                         }
-                        // ==================== NID + MOTHER'S NAME CARD ====================
-                        // Only show if NID is missing OR secret answer is missing
+                        // ==================== MOTHER'S NAME CARD (PIN reset secret) ====================
+                        // Independent of National ID. Shown only when mother's name is missing.
                         workerDetails?.let { worker ->
-                            if (worker.nid.isNullOrBlank() || worker.secretQuestion.isNullOrBlank()) {
+                            if (worker.secretQuestion.isNullOrBlank() && !skippedMotherPrompt) {
+                                val taskDark = isSystemInDarkTheme()
                                 Card(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(vertical = 8.dp)
-                                        .border(2.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.medium),
-                                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                                        .border(
+                                            3.dp,
+                                            if (taskDark) TaskBorderDark else TaskBorderLight,
+                                            MaterialTheme.shapes.medium
+                                        ),
+                                    elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
                                     colors = CardDefaults.cardColors(
-                                        containerColor = MaterialTheme.colorScheme.primaryContainer,
-                                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                        containerColor = if (taskDark) TaskAmberDark else TaskAmberLight,
+                                        contentColor = if (taskDark) TaskTitleDark else TaskTitleLight
                                     )
                                 ) {
                                     Column(
@@ -923,30 +1049,27 @@ fun HomeScreen(
                                         horizontalAlignment = Alignment.CenterHorizontally
                                     ) {
                                         Text(
-                                            text = "Fastaem blong save PIN blong yu",
+                                            text = "YU MAS MEKEM",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (taskDark) TaskBorderDark else TaskBorderLight
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = "Nem blong mama (blong resetem PIN)",
                                             style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.Bold
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (taskDark) TaskTitleDark else TaskTitleLight
                                         )
                                         Spacer(modifier = Modifier.height(8.dp))
                                         Text(
-                                            text = "Putum National ID blong yu mo nem blong mami blong yu, from bae i helpem yu blong resetem PIN sapos yu fogetem.",
-                                            style = MaterialTheme.typography.bodyMedium
+                                            text = "Putum first name blong mami blong yu. Bae mifala askem sapos yu fogetem PIN o username. Yu save mekem hem sapos National ID i no stap yet.",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = if (taskDark) Color(0xFFFFF8E1) else Color(0xFF3E2723)
                                         )
 
                                         Spacer(modifier = Modifier.height(16.dp))
 
-                                        // NID Field
-                                        OutlinedTextField(
-                                            value = nidInput,
-                                            onValueChange = { if (it.matches(Regex("^\\d*$"))) nidInput = it },
-                                            label = { Text("National ID Card Number (NID)") },
-                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
-
-                                        Spacer(modifier = Modifier.height(16.dp))
-
-                                        // Secret Question - Mother's first name
                                         Text(
                                             text = "Wanem nem blong mami blong yu?",
                                             style = MaterialTheme.typography.bodyMedium,
@@ -956,30 +1079,226 @@ fun HomeScreen(
                                             value = secretAnswerInput,
                                             onValueChange = { secretAnswerInput = it.trim() },
                                             label = { Text("Ansa") },
-                                            modifier = Modifier.fillMaxWidth()
+                                            modifier = Modifier.fillMaxWidth(),
+                                            colors = OutlinedTextFieldDefaults.colors(
+                                                focusedBorderColor = if (taskDark) TaskBorderDark else TaskBorderLight,
+                                                unfocusedBorderColor = if (taskDark) TaskBorderDark else TaskBorderLight,
+                                                focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                                unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                                            )
                                         )
 
                                         Spacer(modifier = Modifier.height(20.dp))
 
                                         Button(
-                                            onClick = { saveNIDAndSecret() },
+                                            onClick = { saveMotherNameOnly() },
                                             modifier = Modifier.fillMaxWidth(),
-                                            enabled = nidInput.length >= 4 && secretAnswerInput.isNotBlank() && !isSavingNID
+                                            enabled = secretAnswerInput.isNotBlank() && !isSavingMother,
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = if (taskDark) TaskButtonDark else TaskButtonLight,
+                                                contentColor = Color.White
+                                            )
                                         ) {
-                                            if (isSavingNID) {
-                                                CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                                            if (isSavingMother) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(20.dp),
+                                                    color = Color.White
+                                                )
                                             } else {
-                                                Text("Save")
+                                                Text("Save nem blong mama")
                                             }
                                         }
 
                                         TextButton(onClick = { showSkipWarning = true }) {
-                                            Text("Skip / Mekem nara taem", color = MaterialTheme.colorScheme.onPrimaryContainer)
+                                            Text(
+                                                "Skip / Mekem nara taem",
+                                                color = if (taskDark) TaskTitleDark else TaskTitleLight
+                                            )
                                         }
                                     }
                                 }
                             }
                         }
+                        // ==================== NATIONAL ID CARD (NID Number + Expiry) ====================
+                        workerDetails?.let { worker ->
+                            val hasNID = !worker.nid.isNullOrBlank()
+                            val hasExpiry = !worker.NIDExp.isNullOrBlank() && worker.NIDExp != "0000-00-00"
+                            val isExpired = hasExpiry && isNIDExpired(worker.NIDExp)
+
+                            // 1. Missing NID → Show full card (NID + Expiry)
+                            if (!hasNID) {
+                                val taskDark = isSystemInDarkTheme()
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 8.dp)
+                                        .border(
+                                            3.dp,
+                                            if (taskDark) TaskBorderDark else TaskBorderLight,
+                                            MaterialTheme.shapes.medium
+                                        ),
+                                    elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = if (taskDark) TaskAmberDark else TaskAmberLight,
+                                        contentColor = if (taskDark) TaskTitleDark else TaskTitleLight
+                                    )
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(16.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Text(
+                                            text = "YU MAS MEKEM",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (taskDark) TaskBorderDark else TaskBorderLight
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = "National ID Card",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (taskDark) TaskTitleDark else TaskTitleLight
+                                        )
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            text = "Putum namba mo expiry date blong National ID kad blong yu. I helpem mifala konfaemem yu, mo helpem resetem PIN.",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = if (taskDark) Color(0xFFFFF8E1) else Color(0xFF3E2723)
+                                        )
+
+                                        Spacer(modifier = Modifier.height(16.dp))
+
+                                        OutlinedTextField(
+                                            value = nidInput,
+                                            onValueChange = { if (it.matches(Regex("^\\d*$"))) nidInput = it },
+                                            label = { Text("National ID Card Number (NIN)") },
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+
+                                        Spacer(modifier = Modifier.height(12.dp))
+
+                                        OutlinedTextField(
+                                            value = nidExpInput,
+                                            onValueChange = { newValue ->
+                                                // Allow digits, letters (for month names), spaces, /, -, and limit length
+                                                if (newValue.matches(Regex("^[\\dA-Za-z\\s/.,-]{0,22}$"))) {
+                                                    nidExpInput = newValue
+                                                }
+                                            },
+                                            label = { Text("Expiry Date (e.g. 31/12/2028 or 31 Dec 2028)") },
+                                            placeholder = { Text("31 Dec 2028") },
+                                            // Ascii, not Text: Text keeps the number pad after the NID field on many phones.
+                                            keyboardOptions = KeyboardOptions(
+                                                capitalization = KeyboardCapitalization.Words,
+                                                keyboardType = KeyboardType.Ascii,
+                                                imeAction = ImeAction.Done
+                                            ),
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+
+                                        Spacer(modifier = Modifier.height(16.dp))
+
+                                        Button(
+                                            onClick = {
+                                                if (!hasNID) saveNIDAndExpiry()
+                                                else saveNIDExpiryOnly()
+                                            },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            enabled = (hasNID || nidInput.length >= 4) &&
+                                                    normaliseDate(nidExpInput) != null &&
+                                                    !isSavingNID,
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = if (taskDark) TaskButtonDark else TaskButtonLight,
+                                                contentColor = Color.White
+                                            )
+                                        ) {
+                                            if (isSavingNID) {
+                                                CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                                            } else {
+                                                Text(if (!hasNID) "Save NID & Expiry Date" else "Update Expiry Date")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            // 2. Has NID but expired → Show warning + expiry update only
+                            else if (isExpired) {
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 8.dp)
+                                        .border(3.dp, MaterialTheme.colorScheme.error, MaterialTheme.shapes.medium),
+                                    elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                                        contentColor = MaterialTheme.colorScheme.onErrorContainer
+                                    )
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(16.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Text(
+                                            text = "YU MAS MEKEM",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = "National ID blong yu i expaia finis!",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            text = "Plis putum niu expiry date blong National ID kad blong yu.",
+                                            style = MaterialTheme.typography.bodyMedium
+                                        )
+
+                                        Spacer(modifier = Modifier.height(16.dp))
+
+                                        // Improved Expiry Input - accepts dd/mm/yyyy, dd-mm-yyyy, dd mmm yyyy
+                                        OutlinedTextField(
+                                            value = nidExpInput,
+                                            onValueChange = { newValue ->
+                                                if (newValue.matches(Regex("^[\\dA-Za-z\\s/.,-]{0,22}$"))) {
+                                                    nidExpInput = newValue
+                                                }
+                                            },
+                                            label = { Text("Niu Expiry Date") },
+                                            placeholder = { Text("31 Dec 2028") },
+                                            keyboardOptions = KeyboardOptions(
+                                                capitalization = KeyboardCapitalization.Words,
+                                                keyboardType = KeyboardType.Ascii,
+                                                imeAction = ImeAction.Done
+                                            ),
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+
+                                        Spacer(modifier = Modifier.height(16.dp))
+
+                                        Button(
+                                            onClick = { saveNIDExpiryOnly() },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            enabled = normaliseDate(nidExpInput) != null && !isSavingNID
+                                        ) {
+                                            if (isSavingNID) {
+                                                CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                                            } else {
+                                                Text("Update Expiry Date")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         if (worker.contract == "Ready to Sign" && showContractCard) {
                             Card(
                                 modifier = Modifier
@@ -1126,300 +1445,492 @@ fun HomeScreen(
                             }
                         }
                     }
-                    // ==================== NATIONAL ID CARD (NID Number + Expiry) ====================
+                    // ==================== MEDICAL CARD - Smart Logic (NZ + HAP ID) ====================
                     workerDetails?.let { worker ->
-                        val hasNID = !worker.nid.isNullOrBlank()
-                        val hasExpiry = !worker.NIDExp.isNullOrBlank() && worker.NIDExp != "0000-00-00"
-                        val isExpired = hasExpiry && isNIDExpired(worker.NIDExp)
+                        val emedStatus = worker.emed?.trim() ?: ""
+                        val emedKey = emedStatus.lowercase()
+                            .replace('_', '-')
+                            .replace(' ', '-')
+                            .replace(Regex("-+"), "-")
+                        val hapId = worker.hapid?.trim() ?: ""
+                        val country = worker.rsecountry?.trim() ?: ""
+                        val isNZ = country.equals("NZ", ignoreCase = true)
 
-                        // 1. Missing NID → Show full card (NID + Expiry)
-                        if (!hasNID) {
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 8.dp)
-                                    .border(2.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.medium),
-                                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        val normalizedHapId = hapId.trim()
+                        val hasValidHapid = normalizedHapId.isNotEmpty() &&
+                                normalizedHapId != "0" &&
+                                normalizedHapId.lowercase() != "null"
+
+                        val isCheckedIn = worker.notices in listOf(
+                            "App Checkin",
+                            "App-Checkin",
+                            "App-Accepted",
+                            "Notified",
+                            "Reported In",
+                            "Underway"
+                        )
+                        val hapNumber = hapId.toLongOrNull() ?: 0L
+                        val hapOk = hapNumber > 0
+                        val showGoingButton = hapOk && emedKey in setOf("not-yet", "notified", "sent")
+                        val showAppointmentButton = hapOk && emedKey in setOf("not-yet", "notified", "sent", "app-going")
+                        val showDoneButton = hapOk && emedKey in setOf("not-yet", "sent", "notified", "app-going", "app-appt")
+                        val showMedicalCard = when {
+                            emedStatus.equals("Not required", ignoreCase = true) -> false
+                            emedKey == "app-done" -> false
+                            showAppointmentButton || showDoneButton || emedKey == "app-clinic" || emedKey == "not-yet" -> true
+                            !isCheckedIn -> false
+                            isNZ -> true
+                            emedStatus.equals("Required", ignoreCase = true) -> true
+                            hasValidHapid || emedStatus.equals("Not Yet", ignoreCase = true) -> true
+                            else -> emedStatus.isNotEmpty()
+                        }
+
+                        if (!showMedicalCard) return@let
+
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp)
+                                .border(
+                                    2.dp,
+                                    if (emedKey == "alert!") MaterialTheme.colorScheme.error
+                                    else MaterialTheme.colorScheme.secondary,
+                                    MaterialTheme.shapes.medium
+                                ),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (emedKey == "alert!")
+                                    MaterialTheme.colorScheme.errorContainer
+                                else MaterialTheme.colorScheme.surface,
+                                contentColor = if (emedKey == "alert!")
+                                    MaterialTheme.colorScheme.onErrorContainer
+                                else MaterialTheme.colorScheme.onSurface
+                            )
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Text(
+                                    text = if (isNZ) "GENERAL MEDICAL (NZ)" else "eMEDICAL (Australia)",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (emedKey == "alert!")
+                                        MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
                                 )
-                            ) {
-                                Column(
-                                    modifier = Modifier.padding(16.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
+
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                if (!isNZ) {
+                                    val hapIdStyle = MaterialTheme.typography.bodyLarge
+                                    val hapIdNumberSize = hapIdStyle.fontSize * 3
+
                                     Text(
-                                        text = "Fastaem blong save PIN blong yu",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold
+                                        text = buildAnnotatedString {
+                                            append("HAP ID: ")
+                                            if (hasValidHapid) {
+                                                withStyle(
+                                                    SpanStyle(
+                                                        fontSize = hapIdNumberSize,
+                                                        fontWeight = FontWeight.Medium,
+                                                        color = MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                ) {
+                                                    append(normalizedHapId)
+                                                }
+                                            } else {
+                                                withStyle(
+                                                    SpanStyle(
+                                                        fontSize = hapIdStyle.fontSize,
+                                                        fontWeight = FontWeight.Medium,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                ) {
+                                                    append("Not issued yet")
+                                                }
+                                            }
+                                        },
+                                        style = hapIdStyle,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                }
+
+                                val displayStatus = when {
+                                    emedStatus.isEmpty() -> "Pending"
+                                    emedStatus.equals("Not required", ignoreCase = true) -> "Not Required"
+                                    emedStatus.equals("Required", ignoreCase = true) -> "Required"
+                                    else -> emedStatus
+                                }
+
+                                val isAlert = emedKey == "alert!" || emedStatus.equals("ALERT!", ignoreCase = true)
+                                val hapIdNumberSize = MaterialTheme.typography.bodyLarge.fontSize * 3
+
+                                if (isAlert) {
+                                    Text(
+                                        text = "Alert!",
+                                        modifier = Modifier.fillMaxWidth(),
+                                        style = MaterialTheme.typography.bodyLarge.copy(fontSize = hapIdNumberSize),
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.error,
+                                        textAlign = TextAlign.Center
                                     )
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        text = "Putum National ID blong yu mo expiry date blong i save helpem yu resetim PIN sapos yu fogetem.",
-                                        style = MaterialTheme.typography.bodyMedium
+                                        text = "Kam luk mifala long ofis. Dokta i askem moa infomesen blong medikel blong yu.",
+                                        modifier = Modifier.fillMaxWidth(),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.error,
+                                        textAlign = TextAlign.Center
                                     )
-
-                                    Spacer(modifier = Modifier.height(16.dp))
-
-                                    OutlinedTextField(
-                                        value = nidInput,
-                                        onValueChange = { if (it.matches(Regex("^\\d*$"))) nidInput = it },
-                                        label = { Text("National ID Card Number (NIN)") },
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                        modifier = Modifier.fillMaxWidth()
+                                } else {
+                                    Text(
+                                        text = "Current Status: $displayStatus",
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onSurface
                                     )
+                                }
+                                if (emedKey !in setOf("finalised", "sent", "notified", "not-yet") && !isAlert) {
+                                    formatEmedDateBislama(worker.emedDate)?.let { spokenDate ->
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            text = when (emedKey) {
+                                                "app-clinic" -> "Medikel i finis: $spokenDate"
+                                                "app-appt" -> "Appointment: $spokenDate"
+                                                else -> spokenDate
+                                            },
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
 
-                                    Spacer(modifier = Modifier.height(12.dp))
+                                Spacer(modifier = Modifier.height(16.dp))
 
-                                    OutlinedTextField(
-                                        value = nidExpInput,
-                                        onValueChange = { newValue ->
-                                            // Allow digits, letters (for month names), spaces, /, -, and limit length
-                                            if (newValue.matches(Regex("^[\\dA-Za-z\\s/\\-]{0,12}$"))) {
-                                                nidExpInput = newValue
-                                            }
-                                        },
-                                        label = { Text("Expiry Date (e.g. 31/12/2028 or 31 Dec 2028)") },
-                                        placeholder = { Text("31/12/2028") },
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),  // Changed to Text
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
+                                when {
+                                    isAlert -> { }
 
-                                    Spacer(modifier = Modifier.height(16.dp))
+                                    emedKey == "app-clinic" -> {
+                                        Text(
+                                            text = "Yu mekem emedikel finis. Be nao emedikel blong yu i stap go long ol dokta blong flatem wok blong hem. Long taem emedikel i klia, bae yu luk Status i go long \"Finalised\".",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
 
+                                    emedKey == "app-appt" -> {
+                                        Text(
+                                            text = "Appointment blong yu i stap. Klinik i gat detel. Mek sua yu go long ${formatEmedDateBislama(worker.emedDate) ?: "dei ia"}.",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+
+                                    isNZ -> {
+                                        Text(
+                                            text = "No eMedical required for NZ unless advised by NZ Immigration.\nGeneral medical still needed.",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+
+                                    !hapOk && !isNZ -> {
+                                        Text(
+                                            text = "Mifala no mekem HAP ID blong yu yet. Traem jekem tumora o kalem ofis.",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                if (showGoingButton) {
+                                    Spacer(modifier = Modifier.height(8.dp))
                                     Button(
                                         onClick = {
-                                            if (!hasNID) saveNIDAndExpiry()
-                                            else saveNIDExpiryOnly()
+                                            viewModel.acknowledgeGoingToMedical(context, worker.ID ?: "")
                                         },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        enabled = (hasNID || nidInput.length >= 4) &&
-                                                normaliseDate(nidExpInput) != null &&
-                                                !isSavingNID
+                                        modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        if (isSavingNID) {
-                                            CircularProgressIndicator(modifier = Modifier.size(20.dp))
-                                        } else {
-                                            Text(if (!hasNID) "Save NID & Expiry Date" else "Update Expiry Date")
+                                        Text("OK, bae mi go blong mekem Medikel")
+                                    }
+                                }
+                                if (showAppointmentButton) {
+                                    var showDateTimePicker by remember { mutableStateOf(false) }
+                                    var pickerStep by remember { mutableStateOf(0) }
+                                    val datePickerState = rememberDatePickerState()
+                                    val timePickerState = rememberTimePickerState(is24Hour = false)
+                                    val dateLabel = normaliseDate(emedApptDate)?.let { iso ->
+                                        val d = java.time.LocalDate.parse(iso)
+                                        "%02d %s %04d".format(
+                                            d.dayOfMonth,
+                                            d.month.getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.ENGLISH),
+                                            d.year
+                                        )
+                                    }
+                                    val timeLabel = normaliseTime(emedApptTime)
+
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    if (dateLabel != null && timeLabel != null) {
+                                        Text(
+                                            text = "Appointment: $dateLabel  $timeLabel",
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    } else {
+                                        Button(
+                                            onClick = {
+                                                pickerStep = 0
+                                                showDateTimePicker = true
+                                            },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            enabled = !isSavingAppointment
+                                        ) {
+                                            if (isSavingAppointment) {
+                                                CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                                            } else {
+                                                Text("Mi mekem apoinmen long klinik finis")
+                                            }
+                                        }
+                                    }
+
+                                    if (showDateTimePicker) {
+                                        Dialog(onDismissRequest = { showDateTimePicker = false }) {
+                                            Card(modifier = Modifier.fillMaxWidth()) {
+                                                Column(modifier = Modifier.padding(8.dp)) {
+                                                    Text(
+                                                        text = if (pickerStep == 0) "Pikim date" else "Pikim taem",
+                                                        style = MaterialTheme.typography.titleMedium,
+                                                        fontWeight = FontWeight.Bold,
+                                                        modifier = Modifier.padding(start = 12.dp, top = 8.dp)
+                                                    )
+                                                    if (pickerStep == 0) {
+                                                        DatePicker(state = datePickerState)
+                                                    } else {
+                                                        TimePicker(
+                                                            state = timePickerState,
+                                                            modifier = Modifier
+                                                                .align(Alignment.CenterHorizontally)
+                                                                .padding(vertical = 16.dp)
+                                                        )
+                                                    }
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement = Arrangement.End
+                                                    ) {
+                                                        TextButton(onClick = { showDateTimePicker = false }) {
+                                                            Text("Kansel")
+                                                        }
+                                                        TextButton(onClick = {
+                                                            if (pickerStep == 0) {
+                                                                if (datePickerState.selectedDateMillis == null) {
+                                                                    Toast.makeText(context, "Plis pikim wan date", Toast.LENGTH_SHORT).show()
+                                                                    return@TextButton
+                                                                }
+                                                                pickerStep = 1
+                                                            } else {
+                                                                val millis = datePickerState.selectedDateMillis
+                                                                if (millis == null) {
+                                                                    pickerStep = 0
+                                                                    return@TextButton
+                                                                }
+                                                                val picked = java.time.Instant.ofEpochMilli(millis)
+                                                                    .atZone(java.time.ZoneOffset.UTC)
+                                                                    .toLocalDate()
+                                                                emedApptDate = "%04d-%02d-%02d".format(
+                                                                    picked.year, picked.monthValue, picked.dayOfMonth
+                                                                )
+                                                                emedApptTime = "%02d:%02d".format(
+                                                                    timePickerState.hour, timePickerState.minute
+                                                                )
+                                                                showDateTimePicker = false
+                                                                saveMedicalAppointment(worker.ID ?: "")
+                                                            }
+                                                        }) { Text(if (pickerStep == 0) "Nekis" else "OK") }
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
-                            }
-                        }
-                        // 2. Has NID but expired → Show warning + expiry update only
-                        else if (isExpired) {
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 8.dp)
-                                    .border(2.dp, MaterialTheme.colorScheme.error, MaterialTheme.shapes.medium),
-                                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.errorContainer,
-                                    contentColor = MaterialTheme.colorScheme.onErrorContainer
-                                )
-                            ) {
-                                Column(
-                                    modifier = Modifier.padding(16.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    Text(
-                                        text = "⚠️ National ID blong yu i expaia finis!",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.error
-                                    )
+
+                                if (showDoneButton) {
+                                    var showDonePicker by remember { mutableStateOf(false) }
+                                    var donePickerStep by remember { mutableStateOf(0) }
+                                    val doneDatePickerState = rememberDatePickerState()
+                                    val doneTimePickerState = rememberTimePickerState(is24Hour = false)
+
                                     Spacer(modifier = Modifier.height(8.dp))
-                                    Text(
-                                        text = "Plis putum niu expiry date blong National ID kad blong yu.",
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-
-                                    Spacer(modifier = Modifier.height(16.dp))
-
-                                    // Improved Expiry Input - accepts dd/mm/yyyy, dd-mm-yyyy, dd mmm yyyy
-                                    OutlinedTextField(
-                                        value = nidExpInput,
-                                        onValueChange = { newValue ->
-                                            if (newValue.matches(Regex("^[\\dA-Za-z\\s/\\-]{0,12}$"))) {
-                                                nidExpInput = newValue
-                                            }
-                                        },
-                                        label = { Text("Niu Expiry Date") },
-                                        placeholder = { Text("31/12/2028 or 31 Dec 2028") },
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
-
-                                    Spacer(modifier = Modifier.height(16.dp))
-
                                     Button(
-                                        onClick = { saveNIDExpiryOnly() },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        enabled = normaliseDate(nidExpInput) != null && !isSavingNID
+                                        onClick = {
+                                            donePickerStep = 0
+                                            showDonePicker = true
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        if (isSavingNID) {
-                                            CircularProgressIndicator(modifier = Modifier.size(20.dp))
-                                        } else {
-                                            Text("Update Expiry Date")
+                                        Text("✅ Mi mekem medikel finis")
+                                    }
+
+                                    if (showDonePicker) {
+                                        Dialog(onDismissRequest = { showDonePicker = false }) {
+                                            Card(modifier = Modifier.fillMaxWidth()) {
+                                                Column(modifier = Modifier.padding(8.dp)) {
+                                                    Text(
+                                                        text = if (donePickerStep == 0) "Pikim date blong medikel" else "Pikim taem (i no mas eksak)",
+                                                        style = MaterialTheme.typography.titleMedium,
+                                                        fontWeight = FontWeight.Bold,
+                                                        modifier = Modifier.padding(start = 12.dp, top = 8.dp)
+                                                    )
+                                                    if (donePickerStep == 0) {
+                                                        DatePicker(state = doneDatePickerState)
+                                                    } else {
+                                                        TimePicker(
+                                                            state = doneTimePickerState,
+                                                            modifier = Modifier
+                                                                .align(Alignment.CenterHorizontally)
+                                                                .padding(vertical = 16.dp)
+                                                        )
+                                                    }
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement = Arrangement.End
+                                                    ) {
+                                                        TextButton(onClick = { showDonePicker = false }) {
+                                                            Text("Kansel")
+                                                        }
+                                                        TextButton(onClick = {
+                                                            if (donePickerStep == 0) {
+                                                                if (doneDatePickerState.selectedDateMillis == null) {
+                                                                    Toast.makeText(context, "Plis pikim wan date", Toast.LENGTH_SHORT).show()
+                                                                    return@TextButton
+                                                                }
+                                                                donePickerStep = 1
+                                                            } else {
+                                                                val millis = doneDatePickerState.selectedDateMillis
+                                                                if (millis == null) {
+                                                                    donePickerStep = 0
+                                                                    return@TextButton
+                                                                }
+                                                                val picked = java.time.Instant.ofEpochMilli(millis)
+                                                                    .atZone(java.time.ZoneOffset.UTC)
+                                                                    .toLocalDate()
+                                                                val date = "%04d-%02d-%02d".format(
+                                                                    picked.year, picked.monthValue, picked.dayOfMonth
+                                                                )
+                                                                val time = "%02d:%02d".format(
+                                                                    doneTimePickerState.hour, doneTimePickerState.minute
+                                                                )
+                                                                showDonePicker = false
+                                                                saveMedicalDone(worker.ID ?: "", date, time)
+                                                            }
+                                                        }) { Text(if (donePickerStep == 0) "Nekis" else "OK") }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (emedKey in setOf("app-going", "sent", "notified", "not-yet", "app-appt")) {
+                                    val clinicPreferred = if (isNZ) "NZ" else "AU"
+                                    var clinics by remember(clinicPreferred) { mutableStateOf<List<MedicalClinic>>(emptyList()) }
+                                    LaunchedEffect(clinicPreferred) {
+                                        viewModel.loadClinics(clinicPreferred) { clinics = it }
+                                    }
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Text(
+                                        text = if (isNZ) "Klinik blong general medical" else "Klinik blong eMedical",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    if (clinics.isEmpty()) {
+                                        Text(
+                                            text = "No klinik i stap yet.",
+                                            style = MaterialTheme.typography.bodyMedium
+                                        )
+                                    }
+                                    clinics.forEach { clinic ->
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Card(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                                        ) {
+                                            Box {
+                                                Column(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(12.dp)
+                                                        .padding(end = 40.dp),
+                                                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                                                ) {
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                    ) {
+                                                        if (clinic.preferred.equals("Yes", true)) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.Star,
+                                                                contentDescription = "Preferred clinic",
+                                                                tint = Color(0xFFD4A017),
+                                                                modifier = Modifier.size(22.dp)
+                                                            )
+                                                        }
+                                                        Text(
+                                                            text = clinic.name,
+                                                            style = MaterialTheme.typography.titleMedium,
+                                                            fontWeight = FontWeight.Bold,
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis,
+                                                            modifier = Modifier.weight(1f, fill = false)
+                                                        )
+                                                    }
+                                                    Text(
+                                                        text = clinic.location,
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        maxLines = 2,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                    Text(
+                                                        text = "Isi o Had: ${clinic.difficulty}",
+                                                        style = MaterialTheme.typography.bodyMedium
+                                                    )
+                                                    Text(
+                                                        text = "Est Vatu: ${clinic.cost}",
+                                                        style = MaterialTheme.typography.bodyMedium
+                                                    )
+                                                    Text(
+                                                        text = "Taem blong mekem: ${clinic.assessTime}",
+                                                        style = MaterialTheme.typography.bodyMedium
+                                                    )
+                                                }
+                                                IconButton(
+                                                    onClick = {
+                                                        val label = clinic.name
+                                                        val uri = "geo:${clinic.lat},${clinic.lng}?q=${clinic.lat},${clinic.lng}($label)&z=15".toUri()
+                                                        val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+                                                            setPackage("com.google.android.apps.maps")
+                                                        }
+                                                        try {
+                                                            context.startActivity(intent)
+                                                        } catch (e: Exception) {
+                                                            Timber.e(e, "Clinic map open error")
+                                                            Toast.makeText(context, "Failed to open Maps", Toast.LENGTH_SHORT).show()
+                                                        }
+                                                    },
+                                                    modifier = Modifier
+                                                        .align(Alignment.TopEnd)
+                                                        .padding(4.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.LocationOn,
+                                                        contentDescription = "Lukluk long Google Maps",
+                                                        tint = MaterialTheme.colorScheme.primary
+                                                    )
+                                                }
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
                     }
-                        // ==================== MEDICAL CARD - Smart Logic (NZ + HAP ID) ====================
-                        workerDetails?.let { worker ->
-                            val emedStatus = worker.emed?.trim() ?: ""
-                            val hapId = worker.hapid?.trim() ?: ""
-                            val country = worker.rsecountry?.trim() ?: ""
-                            val isNZ = country.equals("NZ", ignoreCase = true)
-
-                            val hasValidHapid = hapId.isNotEmpty() && hapId != "0" && hapId.lowercase() != "null"
-
-                            // Only show medical card for workers who are "checked in" + have medical status
-                            val isCheckedIn = worker.notices in listOf("App Checkin", "App-Accepted", "Notified", "Reported In", "Underway")
-
-                            val showMedicalCard = when {
-                                !isCheckedIn -> false                                      // Only show to checked-in workers
-                                emedStatus.equals("Not required", ignoreCase = true) -> false
-                                isNZ -> true                                               // All NZ checked-in workers see General Medical
-                                emedStatus.equals("Required", ignoreCase = true) -> true
-                                hasValidHapid || emedStatus.equals("Not Yet", ignoreCase = true) -> true
-                                else -> emedStatus.isNotEmpty()
-                            }
-
-                            if (!showMedicalCard) return@let
-
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 8.dp)
-                                    .border(
-                                        2.dp,
-                                        if (emedStatus == "ALERT!") MaterialTheme.colorScheme.error
-                                        else MaterialTheme.colorScheme.secondary,
-                                        MaterialTheme.shapes.medium
-                                    ),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = if (emedStatus == "ALERT!")
-                                        MaterialTheme.colorScheme.errorContainer
-                                    else MaterialTheme.colorScheme.surface,
-                                    contentColor = if (emedStatus == "ALERT!")
-                                        MaterialTheme.colorScheme.onErrorContainer
-                                    else MaterialTheme.colorScheme.onSurface
-                                )
-                            ) {
-                                Column(modifier = Modifier.padding(16.dp)) {
-                                    Text(
-                                        text = if (isNZ) "GENERAL MEDICAL (NZ)" else "eMEDICAL (Australia)",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (emedStatus == "ALERT!")
-                                            MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-                                    )
-
-                                    Spacer(modifier = Modifier.height(12.dp))
-
-                                    // === HAP ID (Only for non-NZ) ===
-                                    if (!isNZ) {
-                                        Text(
-                                            text = if (hasValidHapid) "HAP ID: $hapId" else "HAP ID: Not issued yet",
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            fontWeight = FontWeight.Medium,
-                                            color = if (hasValidHapid)
-                                                MaterialTheme.colorScheme.onSurface
-                                            else MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                    }
-
-                                    // Current Status
-                                    val displayStatus = when {
-                                        emedStatus.isEmpty() -> "Pending"
-                                        emedStatus.equals("Not required", ignoreCase = true) -> "Not Required"
-                                        emedStatus.equals("Required", ignoreCase = true) -> "Required"
-                                        else -> emedStatus
-                                    }
-
-                                    Text(
-                                        text = "Current Status: $displayStatus",
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        fontWeight = FontWeight.Medium,
-                                        color = if (emedStatus == "ALERT!")
-                                            MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
-                                    )
-
-                                    Spacer(modifier = Modifier.height(16.dp))
-
-                                    // ==================== BUTTON / INFO LOGIC ====================
-                                    when {
-                                        emedStatus == "ALERT!" -> {
-                                            OutlinedButton(
-                                                onClick = { /* disabled */ },
-                                                modifier = Modifier.fillMaxWidth(),
-                                                enabled = false,
-                                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                                            ) {
-                                                Text("⚠️ PROBLEM: Kalem ofis naoia (ALERT!)")
-                                            }
-
-                                            Text(
-                                                text = "Medical blo yu i gat wan issue.\nPlis kolem office long 34357, 5534357, o 5534358 naoia.",
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                color = MaterialTheme.colorScheme.error,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        }
-
-                                        // NZ Workers - Informational only
-                                        isNZ -> {
-                                            Text(
-                                                text = "No eMedical required for NZ unless advised by NZ Immigration.\nGeneral medical still needed.",
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-
-                                        // Australia logic...
-                                        hasValidHapid && emedStatus.equals("Not Yet", ignoreCase = true) -> {
-                                            Button(
-                                                onClick = {
-                                                    coroutineScope.launch {
-                                                        viewModel.acknowledgeGoingToMedical(context, worker.ID ?: "")
-                                                    }
-                                                },
-                                                modifier = Modifier.fillMaxWidth()
-                                            ) {
-                                                Text("✅ Bae mi go blong mekem e-medikel wantaem")
-                                            }
-                                        }
-
-                                        hasValidHapid && emedStatus in listOf("Sent", "App-Going") -> {
-                                            Button(
-                                                onClick = {
-                                                    coroutineScope.launch {
-                                                        viewModel.markMedicalDone(context)
-                                                    }
-                                                },
-                                                modifier = Modifier.fillMaxWidth()
-                                            ) {
-                                                Text("✅ Mi mekem medikel finis")
-                                            }
-                                        }
-
-                                        else -> {
-                                            Text(
-                                                text = "Mifala no mekem HAP ID blong yu yet. Traem jekem tumora o kalem ofis.",
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
 
                     Spacer(modifier = Modifier.height(16.dp))
 
@@ -1431,24 +1942,6 @@ fun HomeScreen(
                                 navController.navigate("login") {
                                     popUpTo("home") { inclusive = true }
                                 }
-                            }
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp)
-                    ) {
-                        Text("Log Out")
-                    }
-                    Spacer(modifier = Modifier.height(16.dp))
-                    // Add logout button
-                    Button(
-                        onClick = {
-                            coroutineScope.launch {
-                                viewModel.logout(context)
-                                navController.navigate("login") {
-                                    popUpTo("home") { inclusive = true }
-                                }
-                                Timber.d("HomeScreen: Logged out, navigating to LoginScreen")
                             }
                         },
                         modifier = Modifier
@@ -1497,10 +1990,10 @@ fun HomeScreen(
         )
     }
 
-        // Username prompt dialog (your existing one stays below)
-        if (showUsernamePrompt) {
-            // ... your existing username dialog code ...
-        }
+    // Username prompt dialog (your existing one stays below)
+    if (showUsernamePrompt) {
+        // ... your existing username dialog code ...
+    }
 
     // Username prompt dialog
     if (showUsernamePrompt) {

@@ -6,8 +6,8 @@ jackson-core = "2.19.2"
 json = "20250517"
 kotlin = "2.2.10"
 core-ktx = "1.17.0"
-activity-compose = "1.10.1"
-lifecycle = "2.9.3"
+activity-compose = "1.11.0"
+lifecycle = "2.9.4"
 coroutines = "1.10.2"
 material = "1.12.0"
 retrofit = "3.0.0" # Note: Your version; 2.11.0 was used earlier
@@ -16,7 +16,7 @@ okhttp = "5.1.0" # Note: Your version; 4.12.0 was used earlier
 firebase-bom = "34.2.0"
 s3 = "2.32.29"
 security-crypto = "1.1.0"
-navigation = "2.9.3"
+navigation = "2.9.8"
 compose-bom = "2025.08.01"
 media3-exoplayer = "1.8.0"
 java-jwt = "4.5.0"
@@ -54,7 +54,6 @@ androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecyc
 
 # Coroutines
 coil-compose = { module = "io.coil-kt:coil-compose", version.ref = "coil-compose" }
-html2pdf = { module = "com.itextpdf:html2pdf", version.ref = "html2pdf" }
 jackson-core = { module = "com.fasterxml.jackson.core:jackson-core", version.ref = "jackson-core" }
 json = { module = "org.json:json", version.ref = "json" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
